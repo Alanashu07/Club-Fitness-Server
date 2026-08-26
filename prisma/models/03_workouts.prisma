@@ -1,0 +1,106 @@
+// ============================================================================
+// WORKOUTS & EXERCISES
+// ============================================================================
+
+model Exercise {
+  id          String   @id @default(cuid())
+  name        String
+  category    String   // Chest, Back, Legs, Shoulders, Arms, Core, Cardio
+  muscle      String
+  description String?
+  videoUrl    String?
+  imageUrl    String?
+  difficulty  String   @default("Beginner") // Beginner | Intermediate | Advanced
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  planExercises PlanExercise[]
+
+  @@index([category])
+}
+
+model WorkoutPlan {
+  id          String     @id @default(cuid())
+  name        String
+  type        PlanType   @default(WEEKLY)
+  isTemplate  Boolean    @default(false)
+
+  createdBy   User       @relation("PlanCreator", fields: [createdById], references: [id])
+  createdById String
+
+  startDate   DateTime
+  endDate     DateTime
+
+  days        WorkoutDay[]
+  assignments WorkoutAssignment[]
+
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@index([createdById])
+}
+
+model WorkoutDay {
+  id            String       @id @default(cuid())
+  plan          WorkoutPlan  @relation(fields: [planId], references: [id], onDelete: Cascade)
+  planId        String
+  dayOfWeek     String       // Mon, Tue, Wed... or a specific date label
+  isRestDay     Boolean      @default(false)
+
+  exercises     PlanExercise[]
+
+  @@index([planId])
+}
+
+model PlanExercise {
+  id          String     @id @default(cuid())
+  day         WorkoutDay @relation(fields: [dayId], references: [id], onDelete: Cascade)
+  dayId       String
+  exercise    Exercise   @relation(fields: [exerciseId], references: [id])
+  exerciseId  String
+
+  sets        Int        @default(3)
+  reps        Int        @default(12)
+  restSeconds Int        @default(60)
+  notes       String?
+  orderIndex  Int        @default(0)
+
+  @@index([dayId])
+  @@index([exerciseId])
+}
+
+model WorkoutAssignment {
+  id           String       @id @default(cuid())
+  plan         WorkoutPlan  @relation(fields: [planId], references: [id], onDelete: Cascade)
+  planId       String
+  member       User         @relation("AssignedMember", fields: [memberId], references: [id])
+  memberId     String
+
+  startDate    DateTime
+  endDate      DateTime
+  notifySent   Boolean      @default(false)
+
+  completedExerciseIds String[] // simple progress tracking, store completed PlanExercise ids
+
+  assignedAt   DateTime     @default(now())
+
+  @@index([planId])
+  @@index([memberId])
+}
+
+model BodyMeasurement {
+  id          String   @id @default(cuid())
+  member      User     @relation(fields: [memberId], references: [id])
+  memberId    String
+
+  weightKg    Decimal? @db.Decimal(5, 2)
+  bodyFatPct  Decimal? @db.Decimal(5, 2)
+  chestCm     Decimal? @db.Decimal(5, 2)
+  waistCm     Decimal? @db.Decimal(5, 2)
+  armsCm      Decimal? @db.Decimal(5, 2)
+  legsCm      Decimal? @db.Decimal(5, 2)
+
+  recordedAt  DateTime @default(now())
+
+  @@index([memberId])
+}

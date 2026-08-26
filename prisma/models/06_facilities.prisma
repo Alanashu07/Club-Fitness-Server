@@ -1,0 +1,81 @@
+// ============================================================================
+// FACILITIES, EQUIPMENT & CLASSES
+// ============================================================================
+
+model Facility {
+  id          String         @id @default(cuid())
+  name        String
+  description String?
+  imageUrls   String[]
+  openTime    String?        // e.g. "06:00"
+  closeTime   String?        // e.g. "22:00"
+  capacity    Int?
+  rules       String?
+  status      FacilityStatus @default(OPEN)
+
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+}
+
+model Equipment {
+  id          String          @id @default(cuid())
+  name        String
+  category    String?
+  description String?
+  imageUrl    String?
+  location    String?
+  quantity    Int             @default(1)
+  status      EquipmentStatus @default(WORKING)
+
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  bookings    EquipmentBooking[]
+}
+
+model GymClass {
+  id           String   @id @default(cuid())
+  name         String   // Zumba, Yoga, Spinning...
+  trainerName  String
+  room         String?
+  dayOfWeek    String   // Mon, Tue, ...
+  startTime    String   // "08:00"
+  durationMins Int      @default(60)
+  capacity     Int      @default(15)
+
+  createdAt    DateTime @default(now())
+
+  bookings     ClassBooking[]
+
+  @@index([dayOfWeek])
+}
+
+model ClassBooking {
+  id         String        @id @default(cuid())
+  gymClass   GymClass      @relation(fields: [gymClassId], references: [id], onDelete: Cascade)
+  gymClassId String
+  member     User          @relation(fields: [memberId], references: [id])
+  memberId   String
+  status     BookingStatus @default(CONFIRMED)
+  bookedAt   DateTime      @default(now())
+
+  @@unique([gymClassId, memberId])
+  @@index([memberId])
+}
+
+model EquipmentBooking {
+  id          String        @id @default(cuid())
+  equipment   Equipment     @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+  equipmentId String
+  member      User          @relation(fields: [memberId], references: [id])
+  memberId    String
+
+  startTime   DateTime
+  endTime     DateTime
+  status      BookingStatus @default(PENDING)
+
+  createdAt   DateTime      @default(now())
+
+  @@index([equipmentId])
+  @@index([memberId])
+}

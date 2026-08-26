@@ -1,0 +1,653 @@
+// ⚠️ AUTO-GENERATED FILE — do not edit directly.
+// Edit the files in prisma/models/ instead, then re-run merge-schema.sh
+
+// ============================================================================
+// CLUB FITNESS — base config (datasource, generator, enums)
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql" // change to "mysql" / "sqlite" / "mongodb" if needed
+  url      = env("DATABASE_URL")
+}
+
+// ── Enums ───────────────────────────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  STAFF
+  MEMBER
+}
+
+enum UserStatus {
+  ACTIVE
+  EXPIRED
+  SUSPENDED
+  TRIAL
+}
+
+enum FeeStatus {
+  PENDING
+  PAID
+  OVERDUE
+  PARTIAL
+  WAIVED
+}
+
+enum PaymentMethod {
+  CASH
+  UPI
+  BANK_TRANSFER
+  OTHER
+}
+
+enum PlanType {
+  DAILY
+  WEEKLY
+}
+
+enum OrderType {
+  PRE_ORDER
+  WALK_IN
+}
+
+enum OrderStatus {
+  PLACED
+  CONFIRMED
+  READY
+  COLLECTED
+  CANCELLED
+}
+
+enum AnnouncementType {
+  ANNOUNCEMENT
+  OFFER
+  EVENT
+  ALERT
+  MOTIVATION
+}
+
+enum AudienceType {
+  ALL
+  PLAN_TIER
+  INDIVIDUAL
+  STAFF
+}
+
+enum NotificationChannel {
+  PUSH
+  WHATSAPP
+  SMS
+}
+
+enum FacilityStatus {
+  OPEN
+  CLOSED
+  MAINTENANCE
+}
+
+enum EquipmentStatus {
+  WORKING
+  UNDER_REPAIR
+  RETIRED
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  COMPLETED
+  CANCELLED
+}
+
+
+// ============================================================================
+// USERS & MEMBERSHIP PLANS
+// ============================================================================
+
+model session {
+  sid    String   @id @db.VarChar
+  sess   Json     @db.Json
+  expire DateTime @db.Timestamp(6)
+
+  @@index([expire], map: "IDX_session_expire")
+}
+
+model User {
+  id                 String     @id @default(cuid())
+  name               String
+  phone              String     @unique
+  email              String?    @unique
+  passwordHash       String?
+  profileImageUrl    String?
+  role               Role       @default(MEMBER)
+  status             UserStatus @default(ACTIVE)
+  googleId           String?    @unique
+  firebaseUid        String?    @unique
+
+  dateOfBirth        DateTime?
+  emergencyContact   String?
+  medicalNotes       String?
+
+  // Membership (only relevant for MEMBER role)
+  membershipPlanId   String?
+  membershipPlan     MembershipPlan? @relation("MemberPlan", fields: [membershipPlanId], references: [id])
+  membershipStart    DateTime?
+  membershipEnd      DateTime?
+  contentAccessUntil DateTime? // grace period override (admin-configurable)
+
+  // Trainer assignment (for MEMBER role)
+  assignedTrainerId  String?
+  assignedTrainer    User?      @relation("TrainerMembers", fields: [assignedTrainerId], references: [id])
+  trainees           User[]     @relation("TrainerMembers")
+
+  // Staff-only fields
+  staffTitle         String?
+  hireDate           DateTime?
+
+  referralCode       String?    @unique
+  referredById       String?
+  referredBy         User?      @relation("Referrals", fields: [referredById], references: [id])
+  referrals          User[]     @relation("Referrals")
+
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+
+  // ── Relations ───────────────────────────────────────────────────────────
+  feeRecords            FeeRecord[]            @relation("MemberFees")
+  approvedFees          FeeRecord[]            @relation("ApprovedByStaff")
+  workoutPlansCreated    WorkoutPlan[]          @relation("PlanCreator")
+  workoutAssignments     WorkoutAssignment[]    @relation("AssignedMember")
+  productOrders          ProductOrder[]         @relation("MemberOrders")
+  processedOrders         ProductOrder[]         @relation("ProcessedByStaff")
+  announcementsCreated    Announcement[]         @relation("AnnouncementCreator")
+  notifications           Notification[]
+  attendanceRecords       Attendance[]
+  bodyMeasurements        BodyMeasurement[]
+  classBookings            ClassBooking[]
+  equipmentBookings        EquipmentBooking[]
+  feedback                 Feedback[]
+  badges                   UserBadge[]
+  documentsUploaded        Document[]            @relation("DocumentUploader")
+  rotationTokens          RotationToken[]
+
+  @@index([role])
+  @@index([status])
+  @@index([membershipPlanId])
+}
+
+model MembershipPlan {
+  id           String   @id @default(cuid())
+  name         String
+  durationDays Int
+  price        Decimal  @db.Decimal(10, 2)
+  description  String?
+  features     String[] // e.g. ["Gym Floor", "Sauna", "Classes"]
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  members      User[]      @relation("MemberPlan")
+  feeRecords   FeeRecord[]
+
+  @@index([isActive])
+}
+
+// ============================================================================
+// AUTH — ROTATION TOKENS (long-lived session tokens, supports blacklisting)
+// ============================================================================
+
+model RotationToken {
+  id         String    @id @default(cuid())
+  tokenId    String    @unique // the unique id embedded inside the JWT payload
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId     String
+
+  revokedAt  DateTime? // non-null = blacklisted (logout / rotation / security action)
+  expiresAt  DateTime  // mirrors the JWT's own expiry, lets you prune old rows
+
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
+  @@index([tokenId])
+}
+
+model OtpToken {
+  id         String    @id @default(uuid())
+  email      String
+  otpHash    String
+  attempts   Int       @default(0)
+  consumedAt DateTime?
+  expiresAt  DateTime
+  createdAt  DateTime  @default(now())
+
+  @@index([email])
+}
+
+// ============================================================================
+// FEES & PAYMENTS
+// ============================================================================
+
+model FeeRecord {
+  id              String         @id @default(cuid())
+  member          User           @relation("MemberFees", fields: [memberId], references: [id])
+  memberId        String
+
+  plan            MembershipPlan @relation(fields: [planId], references: [id])
+  planId          String
+
+  amount          Decimal        @db.Decimal(10, 2)
+  paidAmount      Decimal?       @db.Decimal(10, 2)
+  status          FeeStatus      @default(PENDING)
+
+  dueDate         DateTime
+  submittedDate   DateTime?
+  approvedDate    DateTime?
+  paidDate        DateTime?
+
+  paymentMethod   PaymentMethod?
+  receiptImageUrl String?
+  notes           String?
+
+  approvedBy      User?          @relation("ApprovedByStaff", fields: [approvedById], references: [id])
+  approvedById    String?
+
+  remindersSent   FeeReminder[]
+
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([memberId])
+  @@index([status])
+  @@index([dueDate])
+}
+
+model FeeReminder {
+  id          String              @id @default(cuid())
+  feeRecord   FeeRecord           @relation(fields: [feeRecordId], references: [id], onDelete: Cascade)
+  feeRecordId String
+  channel     NotificationChannel
+  sentAt      DateTime            @default(now())
+  automatic   Boolean             @default(true) // false = manually triggered by admin/staff
+
+  @@index([feeRecordId])
+}
+
+
+// ============================================================================
+// WORKOUTS & EXERCISES
+// ============================================================================
+
+model Exercise {
+  id          String   @id @default(cuid())
+  name        String
+  category    String   // Chest, Back, Legs, Shoulders, Arms, Core, Cardio
+  muscle      String
+  description String?
+  videoUrl    String?
+  imageUrl    String?
+  difficulty  String   @default("Beginner") // Beginner | Intermediate | Advanced
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  planExercises PlanExercise[]
+
+  @@index([category])
+}
+
+model WorkoutPlan {
+  id          String     @id @default(cuid())
+  name        String
+  type        PlanType   @default(WEEKLY)
+  isTemplate  Boolean    @default(false)
+
+  createdBy   User       @relation("PlanCreator", fields: [createdById], references: [id])
+  createdById String
+
+  startDate   DateTime
+  endDate     DateTime
+
+  days        WorkoutDay[]
+  assignments WorkoutAssignment[]
+
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@index([createdById])
+}
+
+model WorkoutDay {
+  id            String       @id @default(cuid())
+  plan          WorkoutPlan  @relation(fields: [planId], references: [id], onDelete: Cascade)
+  planId        String
+  dayOfWeek     String       // Mon, Tue, Wed... or a specific date label
+  isRestDay     Boolean      @default(false)
+
+  exercises     PlanExercise[]
+
+  @@index([planId])
+}
+
+model PlanExercise {
+  id          String     @id @default(cuid())
+  day         WorkoutDay @relation(fields: [dayId], references: [id], onDelete: Cascade)
+  dayId       String
+  exercise    Exercise   @relation(fields: [exerciseId], references: [id])
+  exerciseId  String
+
+  sets        Int        @default(3)
+  reps        Int        @default(12)
+  restSeconds Int        @default(60)
+  notes       String?
+  orderIndex  Int        @default(0)
+
+  @@index([dayId])
+  @@index([exerciseId])
+}
+
+model WorkoutAssignment {
+  id           String       @id @default(cuid())
+  plan         WorkoutPlan  @relation(fields: [planId], references: [id], onDelete: Cascade)
+  planId       String
+  member       User         @relation("AssignedMember", fields: [memberId], references: [id])
+  memberId     String
+
+  startDate    DateTime
+  endDate      DateTime
+  notifySent   Boolean      @default(false)
+
+  completedExerciseIds String[] // simple progress tracking, store completed PlanExercise ids
+
+  assignedAt   DateTime     @default(now())
+
+  @@index([planId])
+  @@index([memberId])
+}
+
+model BodyMeasurement {
+  id          String   @id @default(cuid())
+  member      User     @relation(fields: [memberId], references: [id])
+  memberId    String
+
+  weightKg    Decimal? @db.Decimal(5, 2)
+  bodyFatPct  Decimal? @db.Decimal(5, 2)
+  chestCm     Decimal? @db.Decimal(5, 2)
+  waistCm     Decimal? @db.Decimal(5, 2)
+  armsCm      Decimal? @db.Decimal(5, 2)
+  legsCm      Decimal? @db.Decimal(5, 2)
+
+  recordedAt  DateTime @default(now())
+
+  @@index([memberId])
+}
+
+
+// ============================================================================
+// PRODUCTS, ORDERS & INVENTORY
+// ============================================================================
+
+model Product {
+  id           String   @id @default(cuid())
+  name         String
+  category     String   // Supplements, Apparel, Accessories, Equipment
+  description  String?
+  price        Decimal  @db.Decimal(10, 2)
+  unit         String   @default("per piece")
+  imageUrl     String?
+  stockCount   Int      @default(0)
+  isActive     Boolean  @default(true)
+  isFeatured   Boolean  @default(false)
+  rating       Decimal? @db.Decimal(2, 1)
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  orderItems   OrderItem[]
+
+  @@index([category])
+  @@index([isActive])
+}
+
+model ProductOrder {
+  id            String       @id @default(cuid())
+  member        User         @relation("MemberOrders", fields: [memberId], references: [id])
+  memberId      String
+
+  orderType     OrderType    @default(PRE_ORDER)
+  status        OrderStatus  @default(PLACED)
+  totalAmount   Decimal      @db.Decimal(10, 2)
+
+  items         OrderItem[]
+
+  processedBy   User?        @relation("ProcessedByStaff", fields: [processedById], references: [id])
+  processedById String?
+
+  placedAt      DateTime     @default(now())
+  collectedAt   DateTime?
+
+  @@index([memberId])
+  @@index([status])
+}
+
+model OrderItem {
+  id        String       @id @default(cuid())
+  order     ProductOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderId   String
+  product   Product      @relation(fields: [productId], references: [id])
+  productId String
+
+  quantity  Int          @default(1)
+  unitPrice Decimal      @db.Decimal(10, 2) // snapshot at order time
+
+  @@index([orderId])
+  @@index([productId])
+}
+
+
+// ============================================================================
+// ANNOUNCEMENTS & NOTIFICATIONS
+// ============================================================================
+
+model Announcement {
+  id             String              @id @default(cuid())
+  title          String
+  body           String
+  type           AnnouncementType    @default(ANNOUNCEMENT)
+
+  createdBy      User                @relation("AnnouncementCreator", fields: [createdById], references: [id])
+  createdById    String
+
+  audienceType   AudienceType        @default(ALL)
+  audiencePlanIds String[]           // used when audienceType = PLAN_TIER
+  audienceUserIds String[]           // used when audienceType = INDIVIDUAL
+
+  channels       NotificationChannel[]
+
+  // Offer-specific fields
+  discountLabel  String?
+  offerExpiresAt DateTime?
+
+  isScheduled    Boolean             @default(false)
+  scheduledFor   DateTime?
+  sentAt         DateTime?
+  isDraft        Boolean             @default(false)
+
+  createdAt      DateTime            @default(now())
+
+  notifications  Notification[]
+
+  @@index([createdById])
+  @@index([type])
+}
+
+model Notification {
+  id             String        @id @default(cuid())
+  user           User          @relation(fields: [userId], references: [id])
+  userId         String
+
+  announcement   Announcement? @relation(fields: [announcementId], references: [id])
+  announcementId String?
+
+  title          String
+  body           String
+  channel        NotificationChannel
+
+  isRead         Boolean       @default(false)
+  sentAt         DateTime      @default(now())
+
+  @@index([userId])
+  @@index([announcementId])
+}
+
+
+// ============================================================================
+// FACILITIES, EQUIPMENT & CLASSES
+// ============================================================================
+
+model Facility {
+  id          String         @id @default(cuid())
+  name        String
+  description String?
+  imageUrls   String[]
+  openTime    String?        // e.g. "06:00"
+  closeTime   String?        // e.g. "22:00"
+  capacity    Int?
+  rules       String?
+  status      FacilityStatus @default(OPEN)
+
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+}
+
+model Equipment {
+  id          String          @id @default(cuid())
+  name        String
+  category    String?
+  description String?
+  imageUrl    String?
+  location    String?
+  quantity    Int             @default(1)
+  status      EquipmentStatus @default(WORKING)
+
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  bookings    EquipmentBooking[]
+}
+
+model GymClass {
+  id           String   @id @default(cuid())
+  name         String   // Zumba, Yoga, Spinning...
+  trainerName  String
+  room         String?
+  dayOfWeek    String   // Mon, Tue, ...
+  startTime    String   // "08:00"
+  durationMins Int      @default(60)
+  capacity     Int      @default(15)
+
+  createdAt    DateTime @default(now())
+
+  bookings     ClassBooking[]
+
+  @@index([dayOfWeek])
+}
+
+model ClassBooking {
+  id         String        @id @default(cuid())
+  gymClass   GymClass      @relation(fields: [gymClassId], references: [id], onDelete: Cascade)
+  gymClassId String
+  member     User          @relation(fields: [memberId], references: [id])
+  memberId   String
+  status     BookingStatus @default(CONFIRMED)
+  bookedAt   DateTime      @default(now())
+
+  @@unique([gymClassId, memberId])
+  @@index([memberId])
+}
+
+model EquipmentBooking {
+  id          String        @id @default(cuid())
+  equipment   Equipment     @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+  equipmentId String
+  member      User          @relation(fields: [memberId], references: [id])
+  memberId    String
+
+  startTime   DateTime
+  endTime     DateTime
+  status      BookingStatus @default(PENDING)
+
+  createdAt   DateTime      @default(now())
+
+  @@index([equipmentId])
+  @@index([memberId])
+}
+
+
+// ============================================================================
+// ATTENDANCE, GAMIFICATION, FEEDBACK & DOCUMENTS
+// ============================================================================
+
+model Attendance {
+  id         String   @id @default(cuid())
+  member     User     @relation(fields: [memberId], references: [id])
+  memberId   String
+
+  checkInAt  DateTime @default(now())
+  checkOutAt DateTime?
+  method     String   @default("QR") // QR | MANUAL
+
+  @@index([memberId])
+  @@index([checkInAt])
+}
+
+model Badge {
+  id          String      @id @default(cuid())
+  name        String      @unique // "30-Day Streak", "First Workout", etc.
+  description String?
+  iconName    String?
+
+  userBadges  UserBadge[]
+}
+
+model UserBadge {
+  id        String   @id @default(cuid())
+  user      User     @relation(fields: [userId], references: [id])
+  userId    String
+  badge     Badge    @relation(fields: [badgeId], references: [id])
+  badgeId   String
+  earnedAt  DateTime @default(now())
+
+  @@unique([userId, badgeId])
+  @@index([userId])
+}
+
+model Feedback {
+  id        String   @id @default(cuid())
+  member    User     @relation(fields: [memberId], references: [id])
+  memberId  String
+
+  category  String   // "class" | "trainer" | "facility" | "general"
+  rating    Int      // 1-5
+  comment   String?
+  refId     String?  // optional reference to GymClass id, trainer User id, etc.
+
+  createdAt DateTime @default(now())
+
+  @@index([memberId])
+}
+
+model Document {
+  id         String   @id @default(cuid())
+  title      String
+  fileUrl    String
+  category   String?  // "rules" | "waiver" | "workout-pdf" | "other"
+
+  uploadedBy User     @relation("DocumentUploader", fields: [uploadedById], references: [id])
+  uploadedById String
+
+  createdAt  DateTime @default(now())
+}
+
+

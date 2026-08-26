@@ -1,0 +1,11 @@
+@"
+node_modules/
+.env
+.env.*
+!.env.example
+dist/
+build/
+coverage/
+prisma/migrations/
+*.log
+"@ | Out-File -Encoding utf8 .gitignore

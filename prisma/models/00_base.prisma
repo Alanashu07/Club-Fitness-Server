@@ -1,0 +1,100 @@
+// ============================================================================
+// CLUB FITNESS — base config (datasource, generator, enums)
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql" // change to "mysql" / "sqlite" / "mongodb" if needed
+  url      = env("DATABASE_URL")
+}
+
+// ── Enums ───────────────────────────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  STAFF
+  MEMBER
+}
+
+enum UserStatus {
+  ACTIVE
+  EXPIRED
+  SUSPENDED
+  TRIAL
+}
+
+enum FeeStatus {
+  PENDING
+  PAID
+  OVERDUE
+  PARTIAL
+  WAIVED
+}
+
+enum PaymentMethod {
+  CASH
+  UPI
+  BANK_TRANSFER
+  OTHER
+}
+
+enum PlanType {
+  DAILY
+  WEEKLY
+}
+
+enum OrderType {
+  PRE_ORDER
+  WALK_IN
+}
+
+enum OrderStatus {
+  PLACED
+  CONFIRMED
+  READY
+  COLLECTED
+  CANCELLED
+}
+
+enum AnnouncementType {
+  ANNOUNCEMENT
+  OFFER
+  EVENT
+  ALERT
+  MOTIVATION
+}
+
+enum AudienceType {
+  ALL
+  PLAN_TIER
+  INDIVIDUAL
+  STAFF
+}
+
+enum NotificationChannel {
+  PUSH
+  WHATSAPP
+  SMS
+}
+
+enum FacilityStatus {
+  OPEN
+  CLOSED
+  MAINTENANCE
+}
+
+enum EquipmentStatus {
+  WORKING
+  UNDER_REPAIR
+  RETIRED
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  COMPLETED
+  CANCELLED
+}

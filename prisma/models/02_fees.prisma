@@ -1,0 +1,48 @@
+// ============================================================================
+// FEES & PAYMENTS
+// ============================================================================
+
+model FeeRecord {
+  id              String         @id @default(cuid())
+  member          User           @relation("MemberFees", fields: [memberId], references: [id])
+  memberId        String
+
+  plan            MembershipPlan @relation(fields: [planId], references: [id])
+  planId          String
+
+  amount          Decimal        @db.Decimal(10, 2)
+  paidAmount      Decimal?       @db.Decimal(10, 2)
+  status          FeeStatus      @default(PENDING)
+
+  dueDate         DateTime
+  submittedDate   DateTime?
+  approvedDate    DateTime?
+  paidDate        DateTime?
+
+  paymentMethod   PaymentMethod?
+  receiptImageUrl String?
+  notes           String?
+
+  approvedBy      User?          @relation("ApprovedByStaff", fields: [approvedById], references: [id])
+  approvedById    String?
+
+  remindersSent   FeeReminder[]
+
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([memberId])
+  @@index([status])
+  @@index([dueDate])
+}
+
+model FeeReminder {
+  id          String              @id @default(cuid())
+  feeRecord   FeeRecord           @relation(fields: [feeRecordId], references: [id], onDelete: Cascade)
+  feeRecordId String
+  channel     NotificationChannel
+  sentAt      DateTime            @default(now())
+  automatic   Boolean             @default(true) // false = manually triggered by admin/staff
+
+  @@index([feeRecordId])
+}

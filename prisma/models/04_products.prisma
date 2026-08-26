@@ -1,0 +1,60 @@
+// ============================================================================
+// PRODUCTS, ORDERS & INVENTORY
+// ============================================================================
+
+model Product {
+  id           String   @id @default(cuid())
+  name         String
+  category     String   // Supplements, Apparel, Accessories, Equipment
+  description  String?
+  price        Decimal  @db.Decimal(10, 2)
+  unit         String   @default("per piece")
+  imageUrl     String?
+  stockCount   Int      @default(0)
+  isActive     Boolean  @default(true)
+  isFeatured   Boolean  @default(false)
+  rating       Decimal? @db.Decimal(2, 1)
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  orderItems   OrderItem[]
+
+  @@index([category])
+  @@index([isActive])
+}
+
+model ProductOrder {
+  id            String       @id @default(cuid())
+  member        User         @relation("MemberOrders", fields: [memberId], references: [id])
+  memberId      String
+
+  orderType     OrderType    @default(PRE_ORDER)
+  status        OrderStatus  @default(PLACED)
+  totalAmount   Decimal      @db.Decimal(10, 2)
+
+  items         OrderItem[]
+
+  processedBy   User?        @relation("ProcessedByStaff", fields: [processedById], references: [id])
+  processedById String?
+
+  placedAt      DateTime     @default(now())
+  collectedAt   DateTime?
+
+  @@index([memberId])
+  @@index([status])
+}
+
+model OrderItem {
+  id        String       @id @default(cuid())
+  order     ProductOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderId   String
+  product   Product      @relation(fields: [productId], references: [id])
+  productId String
+
+  quantity  Int          @default(1)
+  unitPrice Decimal      @db.Decimal(10, 2) // snapshot at order time
+
+  @@index([orderId])
+  @@index([productId])
+}

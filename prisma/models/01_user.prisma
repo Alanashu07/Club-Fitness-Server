@@ -1,0 +1,122 @@
+// ============================================================================
+// USERS & MEMBERSHIP PLANS
+// ============================================================================
+
+model session {
+  sid    String   @id @db.VarChar
+  sess   Json     @db.Json
+  expire DateTime @db.Timestamp(6)
+
+  @@index([expire], map: "IDX_session_expire")
+}
+
+model User {
+  id                 String     @id @default(cuid())
+  name               String
+  phone              String     @unique
+  email              String?    @unique
+  passwordHash       String?
+  profileImageUrl    String?
+  role               Role       @default(MEMBER)
+  status             UserStatus @default(ACTIVE)
+  googleId           String?    @unique
+  firebaseUid        String?    @unique
+
+  dateOfBirth        DateTime?
+  emergencyContact   String?
+  medicalNotes       String?
+
+  // Membership (only relevant for MEMBER role)
+  membershipPlanId   String?
+  membershipPlan     MembershipPlan? @relation("MemberPlan", fields: [membershipPlanId], references: [id])
+  membershipStart    DateTime?
+  membershipEnd      DateTime?
+  contentAccessUntil DateTime? // grace period override (admin-configurable)
+
+  // Trainer assignment (for MEMBER role)
+  assignedTrainerId  String?
+  assignedTrainer    User?      @relation("TrainerMembers", fields: [assignedTrainerId], references: [id])
+  trainees           User[]     @relation("TrainerMembers")
+
+  // Staff-only fields
+  staffTitle         String?
+  hireDate           DateTime?
+
+  referralCode       String?    @unique
+  referredById       String?
+  referredBy         User?      @relation("Referrals", fields: [referredById], references: [id])
+  referrals          User[]     @relation("Referrals")
+
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+
+  // ── Relations ───────────────────────────────────────────────────────────
+  feeRecords            FeeRecord[]            @relation("MemberFees")
+  approvedFees          FeeRecord[]            @relation("ApprovedByStaff")
+  workoutPlansCreated    WorkoutPlan[]          @relation("PlanCreator")
+  workoutAssignments     WorkoutAssignment[]    @relation("AssignedMember")
+  productOrders          ProductOrder[]         @relation("MemberOrders")
+  processedOrders         ProductOrder[]         @relation("ProcessedByStaff")
+  announcementsCreated    Announcement[]         @relation("AnnouncementCreator")
+  notifications           Notification[]
+  attendanceRecords       Attendance[]
+  bodyMeasurements        BodyMeasurement[]
+  classBookings            ClassBooking[]
+  equipmentBookings        EquipmentBooking[]
+  feedback                 Feedback[]
+  badges                   UserBadge[]
+  documentsUploaded        Document[]            @relation("DocumentUploader")
+  rotationTokens          RotationToken[]
+
+  @@index([role])
+  @@index([status])
+  @@index([membershipPlanId])
+}
+
+model MembershipPlan {
+  id           String   @id @default(cuid())
+  name         String
+  durationDays Int
+  price        Decimal  @db.Decimal(10, 2)
+  description  String?
+  features     String[] // e.g. ["Gym Floor", "Sauna", "Classes"]
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  members      User[]      @relation("MemberPlan")
+  feeRecords   FeeRecord[]
+
+  @@index([isActive])
+}
+
+// ============================================================================
+// AUTH — ROTATION TOKENS (long-lived session tokens, supports blacklisting)
+// ============================================================================
+
+model RotationToken {
+  id         String    @id @default(cuid())
+  tokenId    String    @unique // the unique id embedded inside the JWT payload
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId     String
+
+  revokedAt  DateTime? // non-null = blacklisted (logout / rotation / security action)
+  expiresAt  DateTime  // mirrors the JWT's own expiry, lets you prune old rows
+
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
+  @@index([tokenId])
+}
+
+model OtpToken {
+  id         String    @id @default(uuid())
+  email      String
+  otpHash    String
+  attempts   Int       @default(0)
+  consumedAt DateTime?
+  expiresAt  DateTime
+  createdAt  DateTime  @default(now())
+
+  @@index([email])
+}

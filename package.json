@@ -1,0 +1,50 @@
+{
+  "name": "club-fitness-server",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node ./index.js",
+    "dev": "nodemon ./index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@adminjs/design-system": "^4.1.1",
+    "@adminjs/express": "^6.1.1",
+    "@adminjs/prisma": "^5.0.4",
+    "@adminjs/upload": "^4.0.2",
+    "@getbrevo/brevo": "^5.0.4",
+    "@prisma/client": "^6.19.3",
+    "adminjs": "^7.8.17",
+    "axios": "^1.19.0",
+    "bcrypt": "^6.0.0",
+    "bcryptjs": "^3.0.3",
+    "connect-pg-simple": "^10.0.0",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.6",
+    "date-fns": "^4.4.0",
+    "dotenv": "^17.4.2",
+    "exceljs": "^4.4.0",
+    "express": "^5.2.1",
+    "express-formidable": "^1.2.0",
+    "express-session": "^1.19.0",
+    "firebase-admin": "^13.10.0",
+    "google-auth-library": "^10.7.0",
+    "jsonwebtoken": "^9.0.3",
+    "multer": "^2.2.0",
+    "mustache": "^4.2.0",
+    "pdfkit": "^0.19.1",
+    "pg": "^8.22.0",
+    "recharts": "^3.8.1",
+    "tslib": "^2.8.1",
+    "uuid": "^14.0.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14",
+    "prisma": "^6.19.3"
+  }
+}
