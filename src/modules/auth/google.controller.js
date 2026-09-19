@@ -1,5 +1,6 @@
 import prisma from '../../config/db.js';
 import { generateTokenSet, decodeToken } from '../../utils/jwt.js';
+import { sendWelcomeEmail } from '../../utils/mailer.js';
 import { verifyGoogleIdToken } from '../../utils/google-auth.js';
 
 const PUBLIC_USER_FIELDS = {
