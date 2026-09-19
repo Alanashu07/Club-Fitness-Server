@@ -10,6 +10,7 @@ router.use(authenticate, authorize('ADMIN', 'STAFF'));
 router.get('/', memberController.listMembers);
 router.post('/', validateCreateMemberInput, memberController.createMember);
 router.get('/trainers', memberController.getAllTrainers);
+router.post('/:id/reactivate', memberController.reactivateMember);
 router.get('/membership-plans', memberController.getAllMembershipPlans);
 router.post('/membership-plans', memberController.createMembershipPlan);
 router.patch('/membership-plans/:id', memberController.updateMembershipPlan);

@@ -1,0 +1,48 @@
+// ============================================================================
+// DEVICE CHECK-IN — biometric door lock integration (eSSL/ZKTeco ADMS)
+// ============================================================================
+
+enum CheckInResult {
+  ALLOWED
+  DENIED
+}
+
+enum DeviceCommandStatus {
+  PENDING
+  SENT
+  ACKED
+  FAILED
+}
+
+model DeviceCheckInEvent {
+  id          String        @id @default(cuid())
+  member      User?         @relation(fields: [memberId], references: [id])
+  memberId    String?       // null when PIN doesn't match any known member
+
+  deviceSN    String
+  devicePin   Int
+  eventTime   DateTime
+  result      CheckInResult
+  reason      String        // e.g. membership_active, grace_entry_2_of_3, blocked, unknown_user
+  pendingAuth Boolean       @default(false)
+  reviewed    Boolean       @default(false)
+
+  createdAt   DateTime      @default(now())
+
+  @@index([memberId])
+  @@index([deviceSN])
+  @@index([eventTime])
+}
+
+model DeviceCommand {
+  id        String              @id @default(cuid())
+  deviceSN  String
+  command   String              // raw ADMS command string, e.g. "C:...:DATA UPDATE USERINFO ..."
+  status    DeviceCommandStatus @default(PENDING)
+
+  createdAt DateTime            @default(now())
+  sentAt    DateTime?
+  ackedAt   DateTime?
+
+  @@index([deviceSN, status])
+}

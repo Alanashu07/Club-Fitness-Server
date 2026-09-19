@@ -54,5 +54,11 @@ export default {
 
   WHATSAPP_API_TOKEN: process.env.WHATSAPP_API_TOKEN,
 
-  SMS_API_KEY: process.env.SMS_API_KEY
+  SMS_API_KEY: process.env.SMS_API_KEY,
+
+  GRACE_ENTRIES_ALLOWED: process.env.GRACE_ENTRIES_ALLOWED || 3,
+
+  DEFAULT_DEVICE_DOOR_ID: process.env.DEFAULT_DEVICE_DOOR_ID || 1,
+
+  DEFAULT_DEVICE_SN: process.env.DEFAULT_DEVICE_SN
 };

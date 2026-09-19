@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import fs from 'fs';
 import env from './config/env.js';
 import cookieParser from 'cookie-parser';
+import { startMembershipExpiryJob } from './utils/membership-expiry.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -29,24 +30,23 @@ const API_PREFIX = '/api/v1';
 // Function to register API routes (called after AdminJS setup)
 export const registerApiRoutes = async (app) => {
     // Import routes (dynamic imports to ensure they load after admin)
-      const { default: authRoutes } = await import('./modules/auth/auth.routes.js');
-      const { default: homeRoutes } = await import('./modules/home/home.routes.js');
-      const {default: membersRoutes} = await import('./modules/members/members.routes.js');
-      const {default: workoutsRoutes} = await import('./modules/workouts/workouts.routes.js');
-      const {default: reportRoutes} = await import('./modules/report/report.routes.js');
-      const {default: feeRoutes} = await import('./modules/fees/fees.router.js');
-    //   const { default: analyticsRoutes } = await import('./modules/analytics/analytics.routes.js');
-    //   const { default: deepLinkRoutes } = await import('./modules/deep_link/deep_link.routes.js');
+    const { default: authRoutes } = await import('./modules/auth/auth.routes.js');
+    const { default: homeRoutes } = await import('./modules/home/home.routes.js');
+    const { default: membersRoutes } = await import('./modules/members/members.routes.js');
+    const { default: workoutsRoutes } = await import('./modules/workouts/workouts.routes.js');
+    const { default: reportRoutes } = await import('./modules/report/report.routes.js');
+    const { default: feeRoutes } = await import('./modules/fees/fees.router.js');
+    const { default: deviceRoutes } = await import('./modules/device/device.routes.js');
 
-      // API Routes
-      app.use(`${API_PREFIX}/auth`, authRoutes);
-      app.use(`${API_PREFIX}/home`, homeRoutes);
-      app.use(`${API_PREFIX}/members`, membersRoutes);
-      app.use(`${API_PREFIX}/workouts`, workoutsRoutes);
-      app.use(`${API_PREFIX}/report`, reportRoutes);
-      app.use(`${API_PREFIX}/fees`, feeRoutes);
-    //   app.use(`${API_PREFIX}/analytics`, analyticsRoutes);
-    //   app.use(`/app`, deepLinkRoutes);
+    // API Routes
+    app.use(`/device`, deviceRoutes);
+    app.use(`${API_PREFIX}/auth`, authRoutes);
+    app.use(`${API_PREFIX}/home`, homeRoutes);
+    app.use(`${API_PREFIX}/members`, membersRoutes);
+    app.use(`${API_PREFIX}/workouts`, workoutsRoutes);
+    app.use(`${API_PREFIX}/report`, reportRoutes);
+    app.use(`${API_PREFIX}/fees`, feeRoutes);
+    startMembershipExpiryJob();
 
     // Health check endpoint
     app.get(`${API_PREFIX}/health`, (req, res) => {

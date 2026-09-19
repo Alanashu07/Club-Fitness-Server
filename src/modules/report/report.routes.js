@@ -1,8 +1,11 @@
 import { Router } from 'express';
+import bodyParser from 'body-parser';
 import reportController from './report.controller.js';
 import { authenticate, authorize } from '../../middlewares/auth.middleware.js';
 
 const router = Router();
+
+router.use(bodyParser.text({ type: '*/*' }));
 
 // Reports are staff-facing only — every route here requires an ADMIN or
 // STAFF session, same guard style as your other protected routers.

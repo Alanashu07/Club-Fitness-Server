@@ -2,11 +2,19 @@ import dateUtil from '../../utils/date.js';
 import prisma from '../../config/db.js';
 import { hashPassword } from '../../utils/password.js';
 import { sendWelcomeEmail } from '../../utils/mailer.js';
+import checkinService from '../device/checkin.service.js';
+import commandQueue from '../device/device-command-queue.service.js';
+import env from '../../config/env.js';
 
 const FEE_STATUS_SORT_ORDER = { overdue: 0, pending: 1, paid: 2 };
 function asyncHandler(fn) {
     return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 }
+
+const getNextDevicePin = async function () {
+    const result = await prisma.user.aggregate({ _max: { devicePin: true } });
+    return (result._max.devicePin || 0) + 1;
+};
 
 // ── streak: consecutive days of attendance ending today (or yesterday) ─────
 const computeStreak = function (dateStrSet, today) {
@@ -246,6 +254,14 @@ const createMember = asyncHandler(async (req, res) => {
 
     const passwordHash = password ? await hashPassword(password) : null;
 
+    const devicePin = await getNextDevicePin();
+    const deviceSN = env.DEFAULT_DEVICE_SN || req.body.deviceSN;
+
+    if (!deviceSN) {
+        const failure = { title: "No device configured", message: "No biometric device SN was provided and DEFAULT_DEVICE_SN is not set.", code: 400 };
+        return res.status(400).json({ error: 'deviceSN required', code: 'MISSING_DEVICE_SN', failure });
+    }
+
     const member = await prisma.user.create({
         data: {
             name,
@@ -258,6 +274,8 @@ const createMember = asyncHandler(async (req, res) => {
             membershipPlanId: plan.id,
             membershipStart,
             membershipEnd,
+            devicePin,
+            deviceSN,
             assignedTrainerId: trainerId || null,
             feeRecords: {
                 create: {
@@ -284,6 +302,10 @@ const createMember = asyncHandler(async (req, res) => {
     if (member.email) {
         await sendWelcomeEmail(member.email, { name: member.name, planName: plan.name, memberId: member.id, planAmount: plan.price });
     }
+    await commandQueue.queueCommand(
+        deviceSN,
+        `C:${Date.now()}:DATA UPDATE USERINFO Pin=${devicePin}\tName=${name}\tPri=0\tCard=0`
+    );
 
     res.status(201).json({
         member: {
@@ -303,6 +325,7 @@ const createMember = asyncHandler(async (req, res) => {
             workoutStreak: 0,
             feeStatus: 'pending',
             amount: Number(plan.price),
+            devicePin,
         },
     });
 });
@@ -398,4 +421,43 @@ const deleteMembershipPlan = asyncHandler(async (req, res) => {
     res.json({ message: 'Plan deleted Successfully!' });
 });
 
-export default { listMembers, createMember, getAllTrainers, getAllMembershipPlans, createMembershipPlan, updateMembershipPlan, deleteMembershipPlan };
+// ── POST /api/v1/admin/members/:id/reactivate ───────────────────────────────
+// Staff approves payment after a block (expired + grace exhausted). Restores
+// status/expiry and re-authorizes on the device. If the member was ever
+// hard-blocked (blockUserHard, not the default soft block), they'll need to
+// re-enroll their face — this endpoint can't undo that.
+const reactivateMember = asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { newMembershipEnd, planId } = req.body;
+
+    const member = await prisma.user.findUnique({ where: { id } });
+    if (!member || member.role !== 'MEMBER') {
+        const failure = { title: 'Member not found', message: 'No member exists with this id.', code: 404 };
+        return res.status(404).json({ error: 'Member not found', code: 'MEMBER_NOT_FOUND', failure });
+    }
+    if (!member.devicePin || !member.deviceSN) {
+        const failure = { title: 'Member not enrolled', message: 'This member has no device enrollment on file.', code: 400 };
+        return res.status(400).json({ error: 'Member has no device enrollment', code: 'NOT_ENROLLED', failure });
+    }
+
+    const updated = await prisma.user.update({
+        where: { id },
+        data: {
+            status: 'ACTIVE',
+            blocked: false,
+            graceEntriesUsed: 0,
+            membershipEnd: new Date(newMembershipEnd),
+            ...(planId ? { membershipPlanId: planId } : {}),
+        },
+        select: { id: true, name: true, membershipEnd: true, devicePin: true, deviceSN: true },
+    });
+
+    await checkinService.unblockUser(updated.deviceSN, updated.devicePin);
+
+    res.json({
+        member: updated,
+        message: 'Member reactivated. If they were hard-blocked previously, they must re-enroll their face at the device.',
+    });
+});
+
+export default { listMembers, createMember, getAllTrainers, getAllMembershipPlans, createMembershipPlan, updateMembershipPlan, deleteMembershipPlan, reactivateMember };

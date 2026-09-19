@@ -16,6 +16,8 @@ import session from 'express-session';
 import connectPgSimple from 'connect-pg-simple';
 import prisma from './db.js';
 import env from './env.js';
+import checkinService from '../modules/device/checkin.service.js';
+import commandQueue from '../modules/device/device-command-queue.service.js';
 
 AdminJS.registerAdapter({ Database, Resource });
 
@@ -74,14 +76,43 @@ const admin = new AdminJS({
           assignedTrainer: {
             isVisible: { list: false, filter: true, show: true, edit: true },
           },
+          // ── device check-in fields ─────────────────────────────────────
+          devicePin: {
+            isVisible: { list: false, filter: true, show: true, edit: true },
+            description: 'Numeric PIN enrolled on the biometric device. Assigned automatically on member creation.',
+          },
+          deviceSN: {
+            isVisible: { list: false, filter: true, show: true, edit: true },
+            description: 'Serial number of the biometric device this member is enrolled on.',
+          },
+          blocked: {
+            isVisible: { list: true, filter: true, show: true, edit: false },
+            description: 'Controlled via the "Block on Device" / "Reactivate" action buttons on this record — not editable directly, so the DB flag and the device stay in sync.',
+          },
+          graceEntriesUsed: {
+            isVisible: { list: false, filter: true, show: true, edit: true },
+            description: 'Post-expiry check-ins already consumed against GRACE_ENTRIES_ALLOWED.',
+          },
+          deviceCheckIns: {
+            isVisible: { list: false, filter: false, show: true, edit: false },
+          },
         },
-        listProperties: ['id', 'name', 'phone', 'email', 'role', 'status', 'createdAt'],
-        filterProperties: ['name', 'phone', 'email', 'role', 'status', 'membershipPlan'],
+        listProperties: ['id', 'name', 'phone', 'email', 'role', 'status', 'blocked', 'createdAt'],
+        filterProperties: ['name', 'phone', 'email', 'role', 'status', 'membershipPlan', 'devicePin', 'deviceSN', 'blocked'],
         editProperties: [
           'name', 'phone', 'email', 'passwordHash', 'profileImageUrl', 'role', 'status',
           'dateOfBirth', 'emergencyContact', 'medicalNotes', 'membershipPlan',
           'membershipStart', 'membershipEnd', 'contentAccessUntil', 'assignedTrainer',
           'staffTitle', 'hireDate', 'referralCode', 'referredBy',
+          'devicePin', 'deviceSN', 'graceEntriesUsed',
+        ],
+        showProperties: [
+          'id', 'name', 'phone', 'email', 'role', 'status',
+          'dateOfBirth', 'emergencyContact', 'medicalNotes', 'membershipPlan',
+          'membershipStart', 'membershipEnd', 'contentAccessUntil', 'assignedTrainer',
+          'staffTitle', 'hireDate', 'referralCode', 'referredBy',
+          'devicePin', 'deviceSN', 'blocked', 'graceEntriesUsed', 'deviceCheckIns',
+          'createdAt', 'updatedAt',
         ],
         actions: {
           new: {
@@ -100,6 +131,112 @@ const admin = new AdminJS({
                 delete request.payload.passwordHash;
               }
               return request;
+            },
+          },
+
+          // ── device action buttons (shown on the record's Show page) ─────
+
+          blockOnDevice: {
+            actionType: 'record',
+            icon: 'Lock',
+            label: 'Block on Device',
+            guard: 'This will revoke door access for this member on the biometric device. Continue?',
+            isVisible: (context) =>
+              context.record?.params.role === 'MEMBER' && !context.record?.params.blocked,
+            component: false,
+            handler: async (request, response, context) => {
+              const { record, resource, currentAdmin } = context;
+              const { deviceSN, devicePin } = record.params;
+
+              if (!deviceSN || !devicePin) {
+                return {
+                  record: record.toJSON(currentAdmin),
+                  notice: { message: 'This member has no device enrollment on file.', type: 'error' },
+                };
+              }
+
+              await checkinService.blockUserSoft(deviceSN, devicePin);
+              await prisma.user.update({ where: { id: record.params.id }, data: { blocked: true } });
+
+              const updated = await resource.findOne(record.params.id);
+              return {
+                record: updated.toJSON(currentAdmin),
+                notice: { message: `Block command queued for PIN ${devicePin} on ${deviceSN}.`, type: 'success' },
+              };
+            },
+          },
+
+          reactivateOnDevice: {
+            actionType: 'record',
+            icon: 'Unlock',
+            label: 'Reactivate',
+            guard: 'This clears the block, resets grace entries, and restores door access on the device. Make sure membershipEnd is updated first if this follows a payment. Continue?',
+            isVisible: (context) =>
+              context.record?.params.role === 'MEMBER' && context.record?.params.blocked,
+            component: false,
+            handler: async (request, response, context) => {
+              const { record, resource, currentAdmin } = context;
+              const { deviceSN, devicePin, membershipEnd } = record.params;
+
+              if (!deviceSN || !devicePin) {
+                return {
+                  record: record.toJSON(currentAdmin),
+                  notice: { message: 'This member has no device enrollment on file.', type: 'error' },
+                };
+              }
+
+              const stillActive = membershipEnd && new Date(membershipEnd) > new Date();
+
+              await prisma.user.update({
+                where: { id: record.params.id },
+                data: {
+                  blocked: false,
+                  graceEntriesUsed: 0,
+                  status: stillActive ? 'ACTIVE' : record.params.status,
+                },
+              });
+              await checkinService.unblockUser(deviceSN, devicePin);
+
+              const updated = await resource.findOne(record.params.id);
+              return {
+                record: updated.toJSON(currentAdmin),
+                notice: {
+                  message: stillActive
+                    ? `Unblock command queued for PIN ${devicePin}.`
+                    : `Unblock command queued for PIN ${devicePin}. Note: membershipEnd is still in the past — update it if this follows a payment, or the next expiry check will re-block them.`,
+                  type: 'success',
+                },
+              };
+            },
+          },
+
+          resendEnrollment: {
+            actionType: 'record',
+            icon: 'RefreshCw',
+            label: 'Resend Enrollment',
+            guard: 'Re-queues this member\'s PIN/name on the device roster. Use this after a hard block (face template deleted) — the member will still need to walk up and re-enroll their face at the kiosk. Continue?',
+            isVisible: (context) => context.record?.params.role === 'MEMBER',
+            component: false,
+            handler: async (request, response, context) => {
+              const { record, currentAdmin } = context;
+              const { deviceSN, devicePin, name } = record.params;
+
+              if (!deviceSN || !devicePin) {
+                return {
+                  record: record.toJSON(currentAdmin),
+                  notice: { message: 'This member has no device enrollment on file.', type: 'error' },
+                };
+              }
+
+              await commandQueue.queueCommand(
+                deviceSN,
+                `C:${Date.now()}:DATA UPDATE USERINFO Pin=${devicePin}\tName=${name}\tPri=0\tCard=0`
+              );
+
+              return {
+                record: record.toJSON(currentAdmin),
+                notice: { message: `Enrollment command re-queued for PIN ${devicePin}. Have the member enroll their face at the kiosk.`, type: 'success' },
+              };
             },
           },
         },
@@ -164,6 +301,103 @@ const admin = new AdminJS({
         },
         listProperties: ['id', 'feeRecord', 'channel', 'automatic', 'sentAt'],
         filterProperties: ['feeRecord', 'channel', 'automatic'],
+      },
+    },
+
+    // ==================
+    // DEVICE / CHECK-INS (biometric door lock integration)
+    // ==================
+    {
+      resource: { model: getDMMFModelByName('DeviceCheckInEvent'), client: prisma, dmmf: Prisma.dmmf },
+      options: {
+        navigation: { name: 'Device & Check-Ins', icon: 'LogIn' },
+        properties: {
+          member: {
+            isVisible: { list: true, filter: true, show: true, edit: false },
+            description: 'Null when the device PIN did not match any known member (unknown_user).',
+          },
+          result: {
+            availableValues: [
+              { value: 'ALLOWED', label: 'Allowed' },
+              { value: 'DENIED', label: 'Denied' },
+            ],
+          },
+          reason: { isVisible: { list: true, filter: true, show: true, edit: false } },
+          pendingAuth: {
+            isVisible: { list: true, filter: true, show: true, edit: false },
+            description: 'True if this event was let through while the server was unreachable and is awaiting reconciliation.',
+          },
+          reviewed: {
+            isVisible: { list: true, filter: true, show: true, edit: true },
+            description: 'Mark true once staff has reviewed a denied/flagged entry.',
+          },
+          eventTime: { isVisible: { list: true, filter: true, show: true, edit: false } },
+          deviceSN: { isVisible: { list: true, filter: true, show: true, edit: false } },
+          devicePin: { isVisible: { list: true, filter: true, show: true, edit: false } },
+          createdAt: { isVisible: { list: false, filter: true, show: true, edit: false } },
+        },
+        listProperties: ['id', 'member', 'devicePin', 'result', 'reason', 'pendingAuth', 'reviewed', 'eventTime'],
+        filterProperties: ['member', 'deviceSN', 'devicePin', 'result', 'reason', 'pendingAuth', 'reviewed', 'eventTime'],
+        editProperties: ['reviewed'],
+        sort: { sortBy: 'eventTime', direction: 'desc' },
+        actions: {
+          new: { isAccessible: false },
+          delete: { isAccessible: false },
+          // Events are written only by the device controller — the dashboard
+          // can review/flag (`reviewed`) but not fabricate or remove entries.
+
+          retryBlock: {
+            actionType: 'record',
+            icon: 'Lock',
+            label: 'Retry Block Command',
+            guard: 'Re-queues the block command for this event\'s device/PIN. Use if the member is still getting in after being flagged. Continue?',
+            isVisible: (context) => context.record?.params.result === 'DENIED',
+            component: false,
+            handler: async (request, response, context) => {
+              const { record, currentAdmin } = context;
+              const { deviceSN, devicePin } = record.params;
+
+              await checkinService.blockUserSoft(deviceSN, devicePin);
+
+              return {
+                record: record.toJSON(currentAdmin),
+                notice: { message: `Block command re-queued for PIN ${devicePin} on ${deviceSN}.`, type: 'success' },
+              };
+            },
+          },
+        },
+      },
+    },
+    {
+      resource: { model: getDMMFModelByName('DeviceCommand'), client: prisma, dmmf: Prisma.dmmf },
+      options: {
+        navigation: { name: 'Device & Check-Ins', icon: 'Smartphone' },
+        parent: { name: 'Device & Check-Ins' },
+        properties: {
+          status: {
+            availableValues: [
+              { value: 'PENDING', label: 'Pending' },
+              { value: 'SENT', label: 'Sent' },
+              { value: 'ACKED', label: 'Acknowledged' },
+              { value: 'FAILED', label: 'Failed' },
+            ],
+          },
+          command: { isVisible: { list: true, filter: false, show: true, edit: false } },
+          deviceSN: { isVisible: { list: true, filter: true, show: true, edit: false } },
+          sentAt: { isVisible: { list: true, filter: true, show: true, edit: false } },
+          ackedAt: { isVisible: { list: false, filter: true, show: true, edit: false } },
+          createdAt: { isVisible: { list: true, filter: true, show: true, edit: false } },
+        },
+        listProperties: ['id', 'deviceSN', 'command', 'status', 'createdAt', 'sentAt'],
+        filterProperties: ['deviceSN', 'status', 'createdAt'],
+        sort: { sortBy: 'createdAt', direction: 'desc' },
+        actions: {
+          new: { isAccessible: false },
+          edit: { isAccessible: false },
+          // Queue is populated only by server-side services (checkin.service.js,
+          // member.controller.js) — the dashboard is read-only visibility into
+          // what's pending/sent/acked for a given device.
+        },
       },
     },
 
@@ -447,6 +681,9 @@ const admin = new AdminJS({
         navigation: { name: 'Activity', icon: 'Clock' },
         properties: {
           member: { isVisible: { list: true, filter: true, show: true, edit: true } },
+          method: {
+            description: 'QR, MANUAL, or FACE (created automatically on an allowed device check-in).',
+          },
         },
         listProperties: ['id', 'member', 'checkInAt', 'checkOutAt', 'method'],
         filterProperties: ['member', 'checkInAt', 'method'],
@@ -535,6 +772,8 @@ const admin = new AdminJS({
           Product: { name: 'Product', navigation: 'Products' },
           ProductOrder: { name: 'Order', navigation: 'Orders' },
           Announcement: { name: 'Announcement', navigation: 'Announcements' },
+          DeviceCheckInEvent: { name: 'Check-In Event', navigation: 'Check-In Events' },
+          DeviceCommand: { name: 'Device Command', navigation: 'Device Commands' },
         },
       },
     },

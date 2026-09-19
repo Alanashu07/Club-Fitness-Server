@@ -116,20 +116,20 @@ model session {
 }
 
 model User {
-  id                 String     @id @default(cuid())
-  name               String
-  phone              String     @unique
-  email              String?    @unique
-  passwordHash       String?
-  profileImageUrl    String?
-  role               Role       @default(MEMBER)
-  status             UserStatus @default(ACTIVE)
-  googleId           String?    @unique
-  firebaseUid        String?    @unique
+  id              String     @id @default(cuid())
+  name            String
+  phone           String     @unique
+  email           String?    @unique
+  passwordHash    String?
+  profileImageUrl String?
+  role            Role       @default(MEMBER)
+  status          UserStatus @default(ACTIVE)
+  googleId        String?    @unique
+  firebaseUid     String?    @unique
 
-  dateOfBirth        DateTime?
-  emergencyContact   String?
-  medicalNotes       String?
+  dateOfBirth      DateTime?
+  emergencyContact String?
+  medicalNotes     String?
 
   // Membership (only relevant for MEMBER role)
   membershipPlanId   String?
@@ -139,39 +139,44 @@ model User {
   contentAccessUntil DateTime? // grace period override (admin-configurable)
 
   // Trainer assignment (for MEMBER role)
-  assignedTrainerId  String?
-  assignedTrainer    User?      @relation("TrainerMembers", fields: [assignedTrainerId], references: [id])
-  trainees           User[]     @relation("TrainerMembers")
+  assignedTrainerId String?
+  assignedTrainer   User?   @relation("TrainerMembers", fields: [assignedTrainerId], references: [id])
+  trainees          User[]  @relation("TrainerMembers")
 
   // Staff-only fields
-  staffTitle         String?
-  hireDate           DateTime?
+  staffTitle String?
+  hireDate   DateTime?
 
-  referralCode       String?    @unique
-  referredById       String?
-  referredBy         User?      @relation("Referrals", fields: [referredById], references: [id])
-  referrals          User[]     @relation("Referrals")
+  referralCode String? @unique
+  referredById String?
+  referredBy   User?   @relation("Referrals", fields: [referredById], references: [id])
+  referrals    User[]  @relation("Referrals")
 
-  createdAt          DateTime   @default(now())
-  updatedAt          DateTime   @updatedAt
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  devicePin        Int?     @unique // numeric PIN enrolled on the device
+  deviceSN         String? // which device this member is enrolled on
+  blocked          Boolean  @default(false)
+  graceEntriesUsed Int      @default(0)
 
   // ── Relations ───────────────────────────────────────────────────────────
-  feeRecords            FeeRecord[]            @relation("MemberFees")
-  approvedFees          FeeRecord[]            @relation("ApprovedByStaff")
-  workoutPlansCreated    WorkoutPlan[]          @relation("PlanCreator")
-  workoutAssignments     WorkoutAssignment[]    @relation("AssignedMember")
-  productOrders          ProductOrder[]         @relation("MemberOrders")
-  processedOrders         ProductOrder[]         @relation("ProcessedByStaff")
-  announcementsCreated    Announcement[]         @relation("AnnouncementCreator")
-  notifications           Notification[]
-  attendanceRecords       Attendance[]
-  bodyMeasurements        BodyMeasurement[]
-  classBookings            ClassBooking[]
-  equipmentBookings        EquipmentBooking[]
-  feedback                 Feedback[]
-  badges                   UserBadge[]
-  documentsUploaded        Document[]            @relation("DocumentUploader")
-  rotationTokens          RotationToken[]
+  feeRecords           FeeRecord[]          @relation("MemberFees")
+  approvedFees         FeeRecord[]          @relation("ApprovedByStaff")
+  workoutPlansCreated  WorkoutPlan[]        @relation("PlanCreator")
+  workoutAssignments   WorkoutAssignment[]  @relation("AssignedMember")
+  productOrders        ProductOrder[]       @relation("MemberOrders")
+  processedOrders      ProductOrder[]       @relation("ProcessedByStaff")
+  announcementsCreated Announcement[]       @relation("AnnouncementCreator")
+  notifications        Notification[]
+  attendanceRecords    Attendance[]
+  deviceCheckIns       DeviceCheckInEvent[]
+  bodyMeasurements     BodyMeasurement[]
+  classBookings        ClassBooking[]
+  equipmentBookings    EquipmentBooking[]
+  feedback             Feedback[]
+  badges               UserBadge[]
+  documentsUploaded    Document[]           @relation("DocumentUploader")
+  rotationTokens       RotationToken[]
 
   @@index([role])
   @@index([status])
@@ -189,8 +194,8 @@ model MembershipPlan {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  members      User[]      @relation("MemberPlan")
-  feeRecords   FeeRecord[]
+  members    User[]      @relation("MemberPlan")
+  feeRecords FeeRecord[]
 
   @@index([isActive])
 }
@@ -200,15 +205,15 @@ model MembershipPlan {
 // ============================================================================
 
 model RotationToken {
-  id         String    @id @default(cuid())
-  tokenId    String    @unique // the unique id embedded inside the JWT payload
-  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId     String
+  id      String @id @default(cuid())
+  tokenId String @unique // the unique id embedded inside the JWT payload
+  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId  String
 
-  revokedAt  DateTime? // non-null = blacklisted (logout / rotation / security action)
-  expiresAt  DateTime  // mirrors the JWT's own expiry, lets you prune old rows
+  revokedAt DateTime? // non-null = blacklisted (logout / rotation / security action)
+  expiresAt DateTime // mirrors the JWT's own expiry, lets you prune old rows
 
-  createdAt  DateTime  @default(now())
+  createdAt DateTime @default(now())
 
   @@index([userId])
   @@index([tokenId])
@@ -225,6 +230,7 @@ model OtpToken {
 
   @@index([email])
 }
+
 
 // ============================================================================
 // FEES & PAYMENTS
@@ -648,6 +654,56 @@ model Document {
   uploadedById String
 
   createdAt  DateTime @default(now())
+}
+
+
+// ============================================================================
+// DEVICE CHECK-IN — biometric door lock integration (eSSL/ZKTeco ADMS)
+// ============================================================================
+
+enum CheckInResult {
+  ALLOWED
+  DENIED
+}
+
+enum DeviceCommandStatus {
+  PENDING
+  SENT
+  ACKED
+  FAILED
+}
+
+model DeviceCheckInEvent {
+  id          String        @id @default(cuid())
+  member      User?         @relation(fields: [memberId], references: [id])
+  memberId    String?       // null when PIN doesn't match any known member
+
+  deviceSN    String
+  devicePin   Int
+  eventTime   DateTime
+  result      CheckInResult
+  reason      String        // e.g. membership_active, grace_entry_2_of_3, blocked, unknown_user
+  pendingAuth Boolean       @default(false)
+  reviewed    Boolean       @default(false)
+
+  createdAt   DateTime      @default(now())
+
+  @@index([memberId])
+  @@index([deviceSN])
+  @@index([eventTime])
+}
+
+model DeviceCommand {
+  id        String              @id @default(cuid())
+  deviceSN  String
+  command   String              // raw ADMS command string, e.g. "C:...:DATA UPDATE USERINFO ..."
+  status    DeviceCommandStatus @default(PENDING)
+
+  createdAt DateTime            @default(now())
+  sentAt    DateTime?
+  ackedAt   DateTime?
+
+  @@index([deviceSN, status])
 }
 
 
