@@ -39,7 +39,7 @@ export const registerApiRoutes = async (app) => {
     const { default: deviceRoutes } = await import('./modules/device/device.routes.js');
 
     // API Routes
-    app.use(`/device`, deviceRoutes);
+    app.use(`/`, deviceRoutes);
     app.use(`${API_PREFIX}/auth`, authRoutes);
     app.use(`${API_PREFIX}/home`, homeRoutes);
     app.use(`${API_PREFIX}/members`, membersRoutes);
