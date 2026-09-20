@@ -1,7 +1,19 @@
-import prisma from '../../config/db.js';
+import prisma from '../config/db.js';
+
+// ── short, monotonically-increasing command IDs ─────────────────────────────
+// Some ADMS firmwares expect the "C:<id>:..." id to be a small integer they
+// can echo back in the ack — a 13-digit Date.now() value can silently break
+// parsing on those firmwares (command gets fetched, never executed, no
+// visible error). Keep it compact and stable instead.
+let commandIdCounter = Math.floor(Date.now() / 1000) % 1000000;
+const nextCommandId = function () {
+    commandIdCounter = (commandIdCounter + 1) % 1000000;
+    return commandIdCounter;
+};
 
 // ── enqueue a raw ADMS command string for a device to pick up next poll ────
-const queueCommand = async function (deviceSN, command) {
+const queueCommand = async function (deviceSN, commandBody) {
+    const command = `C:${nextCommandId()}:${commandBody}`;
     return prisma.deviceCommand.create({
         data: { deviceSN, command, status: 'PENDING' },
     });

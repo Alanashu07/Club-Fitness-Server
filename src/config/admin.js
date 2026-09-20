@@ -16,8 +16,8 @@ import session from 'express-session';
 import connectPgSimple from 'connect-pg-simple';
 import prisma from './db.js';
 import env from './env.js';
-import checkinService from '../modules/device/checkin.service.js';
-import commandQueue from '../modules/device/device-command-queue.service.js';
+import checkinService from '../services/checkin.service.js';
+import commandQueue from '../services/deviceCommandQueue.service.js';
 
 AdminJS.registerAdapter({ Database, Resource });
 
@@ -230,7 +230,7 @@ const admin = new AdminJS({
 
               await commandQueue.queueCommand(
                 deviceSN,
-                `C:${Date.now()}:DATA UPDATE USERINFO Pin=${devicePin}\tName=${name}\tPri=0\tCard=0`
+                `DATA UPDATE USERINFO Pin=${devicePin}\tName=${name}\tPri=0\tCard=0`
               );
 
               return {
