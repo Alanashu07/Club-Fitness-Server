@@ -11,7 +11,7 @@ import env from '../../config/env.js';
 const blockUserSoft = async function (deviceSN, devicePin) {
     await commandQueue.queueCommand(
         deviceSN,
-        `DATA UPDATE userauthorize Pin=${devicePin}\t(HT)AuthorizeDoorId=0\t(HT)IsAuthorize=0`
+        `DATA UPDATE userauthorize PIN=${devicePin}\t(HT)AuthorizeDoorId=0\t(HT)IsAuthorize=0`
     );
 };
 
@@ -19,13 +19,13 @@ const blockUserSoft = async function (deviceSN, devicePin) {
 // Guaranteed to work on any ADMS-compatible firmware, but the member must
 // re-enroll their face at the kiosk after being unblocked.
 const blockUserHard = async function (deviceSN, devicePin) {
-    await commandQueue.queueCommand(deviceSN, `DATA DELETE USERINFO Pin=${devicePin}`);
+    await commandQueue.queueCommand(deviceSN, `DATA DELETE USERINFO PIN=${devicePin}`);
 };
 
 const unblockUser = async function (deviceSN, devicePin, doorId = env.DEFAULT_DEVICE_DOOR_ID) {
     await commandQueue.queueCommand(
         deviceSN,
-        `DATA UPDATE userauthorize Pin=${devicePin}\t(HT)AuthorizeDoorId=${doorId}\t(HT)IsAuthorize=1`
+        `DATA UPDATE userauthorize PIN=${devicePin}\t(HT)AuthorizeDoorId=${doorId}\t(HT)IsAuthorize=1`
     );
 };
 
