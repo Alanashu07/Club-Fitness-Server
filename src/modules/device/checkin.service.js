@@ -32,7 +32,7 @@ const unblockUser = async function (deviceSN, devicePin, doorId = env.DEFAULT_DE
 // ── the actual decision, called from the ATTLOG push handler ───────────────
 const handleCheckInEvent = async function ({ deviceSN, devicePin, eventTime, pendingAuth = false }) {
     const member = await prisma.user.findFirst({
-        where: { devicePin, deviceSN, role: 'MEMBER' },
+        where: { devicePin, deviceSN },
     });
 
     if (!member) {
@@ -49,7 +49,7 @@ const handleCheckInEvent = async function ({ deviceSN, devicePin, eventTime, pen
         });
     }
 
-    const membershipActive = member.status === 'ACTIVE' && member.membershipEnd && member.membershipEnd > new Date();
+    const membershipActive = member.role === 'ADMIN' || (member.status === 'ACTIVE' && member.membershipEnd && member.membershipEnd > new Date());
 
     if (membershipActive) {
         await recordAttendance(member.id, eventTime);
