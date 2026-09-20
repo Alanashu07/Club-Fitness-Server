@@ -1,4 +1,4 @@
-import prisma from '../config/db.js';
+import prisma from '../../config/db.js';
 
 // ── short, monotonically-increasing command IDs ─────────────────────────────
 // Some ADMS firmwares expect the "C:<id>:..." id to be a small integer they
