@@ -304,7 +304,7 @@ const createMember = asyncHandler(async (req, res) => {
     }
     await commandQueue.queueCommand(
         deviceSN,
-        `DATA UPDATE USERINFO Pin=${devicePin}\tName=${name}\tPri=0\tPasswd=\tCard=0\tGrp=1\tTZ=0000000000000000\tVerify=0\tViceCard=0`
+        `DATA UPDATE USERINFO Pin=${devicePin}\tName=${name}\tPri=0\tCard=0`
     );
 
     res.status(201).json({
