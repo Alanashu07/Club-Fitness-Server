@@ -742,6 +742,7 @@ const admin = new AdminJS({
     companyName: 'Club Fitness Admin',
     logo: false,
     softwareBrothers: false,
+    favicon: 'https://api.clubfitness.co.in/media/favicon.ico',
     theme: {
       colors: {
         primary100: '#4F46E5',
