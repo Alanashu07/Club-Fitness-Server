@@ -6,6 +6,7 @@ const main = async () => {
   try {
     console.log('🚀 Starting ToteBags backend...');
     console.log(`📌 Environment: ${env.NODE_ENV || 'development'}`);
+    app.set('trust proxy', 1);
 
     // Only setup AdminJS in development or when not on Vercel
     if (env.NODE_ENV !== 'production' || !process.env.VERCEL) {

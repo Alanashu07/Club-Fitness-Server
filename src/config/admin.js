@@ -786,26 +786,15 @@ const adminRouter = AdminJSExpress.buildAuthenticatedRouter(
   admin,
   {
     authenticate: async (email, password) => {
-      console.log('ADMIN LOGIN ATTEMPT:', {
-        email,
-        passwordLength: password?.length,
-      });
       const user = await prisma.user.findUnique({ where: { email } });
-      console.log('ADMIN USER FOUND:', !!user);
 
       if (!user || (user.role !== 'ADMIN' && user.role !== 'STAFF')) {
-        console.log('ADMIN LOGIN FAILED');
         return null;
       }
 
-      console.log('ADMIN PASSWORD HASH:', user.passwordHash ? 'HAS HASH' : 'EMPTY');
-
       if (!user.passwordHash) return null;
 
-      console.log(`Compare password, entered: ${password}, ADMIN HASH: ${user.passwordHash}`);
-
       const valid = await bcrypt.compare(password, user.passwordHash);
-      console.log("Validity:", valid);
       return valid ? user : null;
     },
     cookieName: 'adminjs',
