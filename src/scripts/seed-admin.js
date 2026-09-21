@@ -23,35 +23,6 @@ async function main() {
 
   const passwordHash = await hash(DEFAULT_PASSWORD);
 
-  // ── Membership Plans ───────────────────────────────────────────────────
-  const monthlyPlan = await prisma.membershipPlan.upsert({
-    where: { id: 'seed-plan-monthly' },
-    update: {},
-    create: {
-      id: 'seed-plan-monthly',
-      name: 'Monthly Plan',
-      durationDays: 30,
-      price: 1500,
-      description: 'Full gym access, billed monthly',
-      features: ['Gym Floor', 'Locker', 'Group Classes'],
-      isActive: true,
-    },
-  });
-
-  const annualPlan = await prisma.membershipPlan.upsert({
-    where: { id: 'seed-plan-annual' },
-    update: {},
-    create: {
-      id: 'seed-plan-annual',
-      name: 'Annual Plan',
-      durationDays: 365,
-      price: 15000,
-      description: 'Full gym access with sauna and classes, billed yearly',
-      features: ['Gym Floor', 'Locker', 'Sauna', 'Group Classes', 'Personal Trainer Sessions'],
-      isActive: true,
-    },
-  });
-
   // ── Admins ─────────────────────────────────────────────────────────────
   const admins = await Promise.all([
     prisma.user.upsert({
@@ -70,8 +41,6 @@ async function main() {
 
   console.log('✅ Seed complete:');
   console.log(`   ${admins.length} admins`);
-  console.log(`   ${trainers.length} trainers`);
-  console.log(`   ${members.length} members`);
   console.log(`   Default password for all seeded users: ${DEFAULT_PASSWORD}`);
 }
 
