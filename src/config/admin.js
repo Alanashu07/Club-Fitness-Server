@@ -792,7 +792,7 @@ const adminRouter = AdminJSExpress.buildAuthenticatedRouter(
         return null;
       }
 
-      // if (!user.passwordHash) return null;
+      if (!user.passwordHash) return null;
 
       const valid = await bcrypt.compare(password, user.passwordHash);
       return valid ? user : null;
