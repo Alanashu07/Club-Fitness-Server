@@ -819,5 +819,6 @@ const adminRouter = AdminJSExpress.buildAuthenticatedRouter(
 
 export default async (app) => {
   app.use(admin.options.rootPath, adminRouter);
-  console.log(`✅ AdminJS available at http://localhost:${env.PORT}${admin.options.rootPath}`);
+  const url = env.NODE_ENV === "production" ? "https://api.clubfitness.co.in" : "http://localhost:3000";
+  console.log(`✅ AdminJS available at $${url}${admin.options.rootPath}`);
 };
