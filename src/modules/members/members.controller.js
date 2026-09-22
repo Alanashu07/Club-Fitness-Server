@@ -215,7 +215,7 @@ const listMembers = asyncHandler(async (req, res) => {
 
 // ── POST /api/admin/members ─────────────────────────────────────────────────
 const createMember = asyncHandler(async (req, res) => {
-    const { name, phone, email, dateOfBirth, password, planId, trainerId } = req.body;
+    const { name, phone, email, dateOfBirth, password, planId, trainerId, startDate } = req.body;
 
     const existing = await prisma.user.findFirst({
         where: { OR: [{ phone }, ...(email ? [{ email }] : [])] },
@@ -243,7 +243,7 @@ const createMember = asyncHandler(async (req, res) => {
         }
     }
 
-    const membershipStart = new Date();
+    const membershipStart = startDate ? new Date(startDate) : new Date();
     const membershipEnd = new Date(membershipStart);
     membershipEnd.setDate(membershipEnd.getDate() + plan.durationDays);
 
