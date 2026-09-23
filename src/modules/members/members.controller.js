@@ -299,13 +299,13 @@ const createMember = asyncHandler(async (req, res) => {
         },
     });
 
-    if (member.email) {
-        await sendWelcomeEmail(member.email, { name: member.name, planName: plan.name, memberId: member.id, planAmount: plan.price });
-    }
-    await commandQueue.queueCommand(
-        deviceSN,
-        `DATA UPDATE USERINFO PIN=${devicePin}\tName=${name}\tPri=0\tCard=0`
-    );
+    // if (member.email) {
+    //     await sendWelcomeEmail(member.email, { name: member.name, planName: plan.name, memberId: member.id, planAmount: plan.price });
+    // }
+    // await commandQueue.queueCommand(
+    //     deviceSN,
+    //     `DATA UPDATE USERINFO PIN=${devicePin}\tName=${name}\tPri=0\tCard=0`
+    // );
 
     res.status(201).json({
         member: {
@@ -328,6 +328,16 @@ const createMember = asyncHandler(async (req, res) => {
             devicePin,
         },
     });
+    if (member.email) {
+        sendWelcomeEmail(member.email, {
+            name: member.name, planName: plan.name, memberId: member.id, planAmount: plan.price,
+        }).catch((err) => logger.error('sendWelcomeEmail failed', { memberId: member.id, err }));
+    }
+
+    commandQueue.queueCommand(
+        deviceSN,
+        `DATA UPDATE USERINFO PIN=${devicePin}\tName=${name}\tPri=0\tCard=0`
+    ).catch((err) => logger.error('queueCommand failed', { memberId: member.id, deviceSN, err }));
 });
 
 const getAllTrainers = asyncHandler(async (req, res) => {
