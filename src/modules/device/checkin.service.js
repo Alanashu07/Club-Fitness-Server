@@ -4,14 +4,14 @@ import env from '../../config/env.js';
 
 // ── block / unblock command builders ────────────────────────────────────────
 
-// Soft block: revokes door authorization only, keeps the enrolled face
-// template intact so unblocking needs no re-enrollment. NOT guaranteed to be
-// honored by every firmware — verify against your actual device before
-// relying on it; fall back to blockUserHard if it's silently ignored.
+// Soft block: reassigns the user to a timezone with zero valid access
+// windows, instead of flipping IsAuthorize. Keeps the enrolled face template
+// intact, and is honored far more consistently across firmware than the
+// authorize flag — same code path the device uses for normal scheduling.
 const blockUserSoft = async function (deviceSN, devicePin) {
     await commandQueue.queueCommand(
         deviceSN,
-        `DATA UPDATE userauthorize PIN=${devicePin}\t(HT)AuthorizeDoorId=0\t(HT)IsAuthorize=0`
+        `DATA UPDATE userauthorize PIN=${devicePin}\tAuthorizeTimeZoneId=${env.BLOCKED_DEVICE_TIME_ZONE_ID}\tAuthorizeDoorId=${env.DEFAULT_DEVICE_DOOR_ID}`
     );
 };
 
@@ -25,7 +25,7 @@ const blockUserHard = async function (deviceSN, devicePin) {
 const unblockUser = async function (deviceSN, devicePin, doorId = env.DEFAULT_DEVICE_DOOR_ID) {
     await commandQueue.queueCommand(
         deviceSN,
-        `DATA UPDATE userauthorize PIN=${devicePin}\t(HT)AuthorizeDoorId=${doorId}\t(HT)IsAuthorize=1`
+        `DATA UPDATE userauthorize PIN=${devicePin}\tAuthorizeTimeZoneId=${env.DEFAULT_DEVICE_TIME_ZONE_ID}\tAuthorizeDoorId=${doorId}`
     );
 };
 
