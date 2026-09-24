@@ -8,10 +8,28 @@ import env from '../../config/env.js';
 // windows, instead of flipping IsAuthorize. Keeps the enrolled face template
 // intact, and is honored far more consistently across firmware than the
 // authorize flag — same code path the device uses for normal scheduling.
+// const blockUserSoft = async function (deviceSN, devicePin) {
+//     await commandQueue.queueCommand(
+//         deviceSN,
+//         `DATA UPDATE userauthorize PIN=${devicePin}\tAuthorizeTimeZoneId=${env.BLOCKED_DEVICE_TIME_ZONE_ID}\tAuthorizeDoorId=${env.DEFAULT_DEVICE_DOOR_ID}`
+//     );
+// };
+
+// Soft block: reassigns the user to the card-only access group, forcing
+// card verification at the terminal. Since the member only has a face
+// template enrolled (no card), this makes them effectively unable to
+// pass, without deleting their face template or touching PIN/timezone.
 const blockUserSoft = async function (deviceSN, devicePin) {
     await commandQueue.queueCommand(
         deviceSN,
-        `DATA UPDATE userauthorize PIN=${devicePin}\tAuthorizeTimeZoneId=${env.BLOCKED_DEVICE_TIME_ZONE_ID}\tAuthorizeDoorId=${env.DEFAULT_DEVICE_DOOR_ID}`
+        `DATA UPDATE USERINFO PIN=${devicePin}\tGrp=${env.BLOCKED_DEVICE_GROUP_ID}`
+    );
+};
+
+const unblockUser = async function (deviceSN, devicePin) {
+    await commandQueue.queueCommand(
+        deviceSN,
+        `DATA UPDATE USERINFO PIN=${devicePin}\tGrp=${env.DEFAULT_DEVICE_GROUP_ID}`
     );
 };
 
@@ -22,12 +40,12 @@ const blockUserHard = async function (deviceSN, devicePin) {
     await commandQueue.queueCommand(deviceSN, `DATA DELETE USERINFO PIN=${devicePin}`);
 };
 
-const unblockUser = async function (deviceSN, devicePin, doorId = env.DEFAULT_DEVICE_DOOR_ID) {
-    await commandQueue.queueCommand(
-        deviceSN,
-        `DATA UPDATE userauthorize PIN=${devicePin}\tAuthorizeTimeZoneId=${env.DEFAULT_DEVICE_TIME_ZONE_ID}\tAuthorizeDoorId=${doorId}`
-    );
-};
+// const unblockUser = async function (deviceSN, devicePin, doorId = env.DEFAULT_DEVICE_DOOR_ID) {
+//     await commandQueue.queueCommand(
+//         deviceSN,
+//         `DATA UPDATE userauthorize PIN=${devicePin}\tAuthorizeTimeZoneId=${env.DEFAULT_DEVICE_TIME_ZONE_ID}\tAuthorizeDoorId=${doorId}`
+//     );
+// };
 
 // ── the actual decision, called from the ATTLOG push handler ───────────────
 const handleCheckInEvent = async function ({ deviceSN, devicePin, eventTime, pendingAuth = false }) {
