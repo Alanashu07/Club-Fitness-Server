@@ -39,8 +39,42 @@ const dequeueNextCommand = async function (deviceSN) {
 // numeric ID the device echoes back (parsed from `ID=<n>` in the ack body) to match
 // an ID you embedded when building the command string. Logged for now; tighten this
 // if you need guaranteed delivery confirmation per command.
+// ── called from POST /iclock/devicecmd — device reporting command execution result ──
 const acknowledgeCommand = async function (deviceSN, rawBody) {
-    console.log(`[DEVICE ACK] ${deviceSN}:`, rawBody);
+    const params = new URLSearchParams(rawBody);
+    const commandId = params.get('ID');
+    const returnCode = params.get('Return');
+
+    if (commandId === null || returnCode === null) {
+        console.warn(`[DEVICE ACK] Unparseable ack from ${deviceSN}:`, rawBody);
+        return null;
+    }
+
+    // Commands are stored as "C:<id>:<body>" — match the echoed ID back to
+    // the SENT row we're waiting on for this device.
+    const cmd = await prisma.deviceCommand.findFirst({
+        where: {
+            deviceSN,
+            command: { startsWith: `C:${commandId}:` },
+            status: 'SENT',
+        },
+        orderBy: { createdAt: 'desc' },
+    });
+
+    if (!cmd) {
+        console.warn(`[DEVICE ACK] No matching SENT command for ${deviceSN} id=${commandId}, return=${returnCode}`, rawBody);
+        return null;
+    }
+
+    const success = returnCode === '0';
+
+    return prisma.deviceCommand.update({
+        where: { id: cmd.id },
+        data: {
+            status: success ? 'ACKED' : 'FAILED',
+            ackedAt: new Date(),
+        },
+    });
 };
 
 export default { queueCommand, dequeueNextCommand, acknowledgeCommand };

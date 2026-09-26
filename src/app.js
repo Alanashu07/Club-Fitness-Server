@@ -23,11 +23,11 @@ app.use(cors());
 app.use(cookieParser());
 app.use(express.json());
 app.use('/media', express.static(mediaDir));
-// app.use((req, res, next) => {
-//   console.log(`[RAW REQUEST] ${req.method} ${req.originalUrl} from ${req.ip}`);
-//   console.log('Headers:', req.headers);
-//   next();
-// });
+app.use((req, res, next) => {
+  console.log(`[RAW REQUEST] ${req.method} ${req.originalUrl} from ${req.ip}`);
+  console.log('Headers:', req.headers);
+  next();
+});
 
 // API version prefix
 const API_PREFIX = '/api/v1';
