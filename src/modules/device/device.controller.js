@@ -81,6 +81,7 @@ const acknowledgeCommand = asyncHandler(async (req, res) => {
 const getDeviceInfo = asyncHandler(async (req, res) => {
     const command = "GET OPTION UserCount,MaxUserCount,FaceCount,MaxFaceCount,FPCount,MaxFingerCount";
     await commandQueue.queueCommand(env.DEFAULT_DEVICE_SN, command);
+    res.json({ message: 'Device info requested successfully!' });
 });
 
 export default { handshake, receiveData, getRequest, acknowledgeCommand, getDeviceInfo };
