@@ -336,7 +336,7 @@ const createMember = asyncHandler(async (req, res) => {
 
     commandQueue.queueCommand(
         deviceSN,
-        `DATA UPDATE USERINFO PIN=${devicePin}\tName=${name}\tPri=0\tCard=0`
+        `DATA UPDATE USERINFO PIN=${devicePin}\tName=${name}\tPri=0\tCard=0\tGrp=${env.DEFAULT_DEVICE_GROUP_ID}`
     ).catch((err) => logger.error('queueCommand failed', { memberId: member.id, deviceSN, err }));
 });
 

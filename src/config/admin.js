@@ -230,7 +230,7 @@ const admin = new AdminJS({
 
               await commandQueue.queueCommand(
                 deviceSN,
-                `DATA UPDATE USERINFO PIN=${devicePin}\tName=${name}\tPri=0\tCard=0`
+                `DATA UPDATE USERINFO PIN=${devicePin}\tName=${name}\tPri=0\tCard=0\tGrp=${env.DEFAULT_DEVICE_GROUP_ID}`
               );
 
               return {
