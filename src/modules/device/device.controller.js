@@ -1,5 +1,6 @@
 import checkinService from './checkin.service.js';
 import commandQueue from './device-command-queue.service.js';
+import env from '../../config/env.js';
 
 function asyncHandler(fn) {
     return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -77,4 +78,9 @@ const acknowledgeCommand = asyncHandler(async (req, res) => {
     res.type('text/plain').send('OK');
 });
 
-export default { handshake, receiveData, getRequest, acknowledgeCommand };
+const getDeviceInfo = asyncHandler(async (req, res) => {
+    const command = "GET OPTION UserCount,MaxUserCount,FaceCount,MaxFaceCount,FPCount,MaxFingerCount";
+    await commandQueue.queueCommand(env.DEFAULT_DEVICE_SN, command);
+});
+
+export default { handshake, receiveData, getRequest, acknowledgeCommand, getDeviceInfo };

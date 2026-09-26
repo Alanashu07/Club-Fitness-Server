@@ -32,4 +32,6 @@ router.get('/iclock/getrequest.aspx', deviceController.getRequest);
 router.post('/iclock/devicecmd', deviceController.acknowledgeCommand);
 router.post('/iclock/devicecmd.aspx', deviceController.acknowledgeCommand);
 
+router.post('/device-info', deviceController.getDeviceInfo);
+
 export default router;
