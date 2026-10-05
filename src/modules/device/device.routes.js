@@ -7,7 +7,8 @@ const router = Router();
 // ADMS sends text/plain-ish, sometimes unlabeled, form-style bodies — never
 // JSON. Parsing is scoped to this router only so it never shadows your
 // app-wide JSON parser used by /api/v1 routes.
-router.use(bodyParser.text({ type: '*/*' }));
+const textParser = bodyParser.text({ type: '*/*' });
+router.use('/iclock', textParser);
 
 // Paths intentionally match the eSSL/ZKTeco ADMS spec exactly — the device
 // is hardcoded to call these and cannot send auth headers, so this router
