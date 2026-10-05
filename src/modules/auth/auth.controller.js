@@ -87,16 +87,19 @@ const login = async function (req, res, next) {
         });
 
         if (!user || !user.passwordHash) {
-            return res.status(401).json({ error: 'Invalid credentials', code: 'INVALID_CREDENTIALS' });
+            const failure = { title: "Invalid credentials", message: "Invalid username or password", code: 401 };
+            return res.status(401).json({ error: 'Invalid credentials', code: 'INVALID_CREDENTIALS', failure });
         }
 
         const passwordMatches = await comparePassword(password, user.passwordHash);
         if (!passwordMatches) {
-            return res.status(401).json({ error: 'Invalid credentials', code: 'INVALID_CREDENTIALS' });
+            const failure = { title: "Invalid credentials", message: "Invalid username or password", code: 401 };
+            return res.status(401).json({ error: 'Invalid credentials', code: 'INVALID_CREDENTIALS', failure });
         }
 
         if (user.status === 'SUSPENDED') {
-            return res.status(403).json({ error: 'Account suspended', code: 'ACCOUNT_SUSPENDED' });
+            const failure = { title: "Account suspended", message: "Your account has been suspended. Please contact support.", code: 403 };
+            return res.status(403).json({ error: 'Account suspended', code: 'ACCOUNT_SUSPENDED', failure });
         }
 
         const tokens = generateTokenSet({ id: user.id, role: user.role });

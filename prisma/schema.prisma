@@ -237,34 +237,38 @@ model OtpToken {
 // ============================================================================
 
 model FeeRecord {
-  id              String         @id @default(cuid())
-  member          User           @relation("MemberFees", fields: [memberId], references: [id])
-  memberId        String
+  id       String @id @default(cuid())
+  member   User   @relation("MemberFees", fields: [memberId], references: [id])
+  memberId String
 
-  plan            MembershipPlan @relation(fields: [planId], references: [id])
-  planId          String
+  plan   MembershipPlan @relation(fields: [planId], references: [id])
+  planId String
 
-  amount          Decimal        @db.Decimal(10, 2)
-  paidAmount      Decimal?       @db.Decimal(10, 2)
-  status          FeeStatus      @default(PENDING)
+  amount     Decimal   @db.Decimal(10, 2)
+  paidAmount Decimal?  @db.Decimal(10, 2)
+  status     FeeStatus @default(PENDING)
 
-  dueDate         DateTime
-  submittedDate   DateTime?
-  approvedDate    DateTime?
-  paidDate        DateTime?
+  dueDate       DateTime
+  submittedDate DateTime?
+  approvedDate  DateTime?
+  paidDate      DateTime?
 
   paymentMethod   PaymentMethod?
   receiptImageUrl String?
   notes           String?
 
-  approvedBy      User?          @relation("ApprovedByStaff", fields: [approvedById], references: [id])
-  approvedById    String?
+  approvedBy   User?   @relation("ApprovedByStaff", fields: [approvedById], references: [id])
+  approvedById String?
 
-  remindersSent   FeeReminder[]
+  remindersSent FeeReminder[]
 
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  periodStart DateTime?
+  periodEnd   DateTime?
+  appliedAt   DateTime?
 
+  @@index([appliedAt, periodStart])
   @@index([memberId])
   @@index([status])
   @@index([dueDate])
@@ -590,6 +594,11 @@ model EquipmentBooking {
   @@index([memberId])
 }
 
+model Holiday {
+  id   String   @id @default(cuid())
+  date DateTime @unique @db.Date
+  name String
+}
 
 // ============================================================================
 // ATTENDANCE, GAMIFICATION, FEEDBACK & DOCUMENTS

@@ -156,7 +156,7 @@ const admin = new AdminJS({
               }
 
               await checkinService.blockUserSoft(deviceSN, devicePin);
-              await prisma.user.update({ where: { id: record.params.id }, data: { blocked: true } });
+              await prisma.user.update({ where: { id: record.params.id }, data: { blocked: true, status: 'SUSPENDED' } });
 
               const updated = await resource.findOne(record.params.id);
               return {

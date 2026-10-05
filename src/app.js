@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 import fs from 'fs';
 import env from './config/env.js';
 import cookieParser from 'cookie-parser';
-import { startMembershipExpiryJob } from './utils/membership-expiry.js';
+import { startCronJob } from './utils/membership-expiry.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -51,7 +51,7 @@ export const registerApiRoutes = async (app) => {
     app.use(`${API_PREFIX}/workouts`, workoutsRoutes);
     app.use(`${API_PREFIX}/report`, reportRoutes);
     app.use(`${API_PREFIX}/fees`, feeRoutes);
-    startMembershipExpiryJob();
+    startCronJob();
 
     // Health check endpoint
     app.get(`${API_PREFIX}/health`, (req, res) => {

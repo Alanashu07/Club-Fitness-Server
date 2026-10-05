@@ -20,4 +20,13 @@ const validateCreateMemberInput = function(req, res, next) {
     next();
 };
 
-export {validateCreateMemberInput};
+const validateUpdateMemberInput = function(req, res, next) {
+    const { phone } = req.body;
+    if(phone && !/^\+?[0-9]{7,15}$/.test(phone)) {
+        const failure = { title: "Invalid phone number", message: "Valid phone number is required", code: 400 };
+        return res.status(400).json({ error: 'Valid phone number is required', code: 'INVALID_PHONE', failure });
+    }
+    next();
+};
+
+export {validateCreateMemberInput, validateUpdateMemberInput };

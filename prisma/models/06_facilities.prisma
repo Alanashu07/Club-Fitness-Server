@@ -79,3 +79,9 @@ model EquipmentBooking {
   @@index([equipmentId])
   @@index([memberId])
 }
+
+model Holiday {
+  id   String   @id @default(cuid())
+  date DateTime @unique @db.Date
+  name String
+}
