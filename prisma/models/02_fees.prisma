@@ -28,12 +28,16 @@ model FeeRecord {
 
   remindersSent FeeReminder[]
 
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  periodStart DateTime?
-  periodEnd   DateTime?
-  appliedAt   DateTime?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+  periodStart    DateTime?
+  periodEnd      DateTime?
+  appliedAt      DateTime?
+  renewalGroupId String?
+  discountAmount Decimal?   @db.Decimal(10, 2)
+  userOffer      UserOffer?
 
+  @@index([renewalGroupId])
   @@index([appliedAt, periodStart])
   @@index([memberId])
   @@index([status])

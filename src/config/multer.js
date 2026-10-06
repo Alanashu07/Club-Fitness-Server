@@ -10,6 +10,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp', 'application/pdf']);
 const ALLOWED_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.pdf']);
 
+// Profile photos: images only (no PDF)
+const IMAGE_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp']);
+
+const PROFILE_FOLDER = 'profiles';
+
 const createStorage = (folder) =>
   multer.diskStorage({
     destination: async (req, file, cb) => {
@@ -27,31 +33,39 @@ const createStorage = (folder) =>
     },
   });
 
-// Receipts are usually a photo or a PDF. Exact matches on both mime type and extension.
-const receiptFileFilter = (req, file, cb) => {
+// Exact matches on both mime type and extension.
+const makeFileFilter = (mimes, exts, fieldName) => (req, file, cb) => {
   const ext = path.extname(file.originalname).toLowerCase();
-  if (ALLOWED_MIME.has(file.mimetype) && ALLOWED_EXT.has(ext)) return cb(null, true);
-  cb(new multer.MulterError('LIMIT_UNEXPECTED_FILE', 'receipt'));
+  if (mimes.has(file.mimetype) && exts.has(ext)) return cb(null, true);
+  cb(new multer.MulterError('LIMIT_UNEXPECTED_FILE', fieldName));
 };
 
 const receiptUpload = multer({
   storage: createStorage('receipts'),
-  fileFilter: receiptFileFilter,
+  fileFilter: makeFileFilter(ALLOWED_MIME, ALLOWED_EXT, 'receipt'),
   limits: { fileSize: 5 * 1024 * 1024, files: 1 }, // 5MB
 });
 
-// Same as receiptUpload.single('receipt'), but upload errors go through `fail`
+const profileUpload = multer({
+  storage: createStorage(PROFILE_FOLDER),
+  fileFilter: makeFileFilter(IMAGE_MIME, IMAGE_EXT, 'profileImage'),
+  limits: { fileSize: 3 * 1024 * 1024, files: 1 }, // 3MB
+});
+
+// Wraps a multer `.single(field)` so upload errors go through `fail`
 // instead of falling into the generic error handler as a 500.
-export const uploadReceipt = (req, res, next) => {
-  receiptUpload.single('receipt')(req, res, (err) => {
+// Non-multipart requests (plain JSON) pass straight through, so the same
+// route keeps working with and without a file.
+const wrapSingle = (upload, field, msgs) => (req, res, next) => {
+  upload.single(field)(req, res, (err) => {
     if (!err) return next();
 
     if (err instanceof multer.MulterError) {
       if (err.code === 'LIMIT_FILE_SIZE') {
-        return fail(req, res, 413, 'File too large', 'RECEIPT_TOO_LARGE', 'Receipt too large', 'The receipt must be 5MB or smaller.');
+        return fail(req, res, 413, 'File too large', msgs.tooLarge.code, msgs.tooLarge.title, msgs.tooLarge.message);
       }
       if (err.code === 'LIMIT_UNEXPECTED_FILE') {
-        return fail(req, res, 400, 'Invalid receipt', 'INVALID_RECEIPT', 'Invalid receipt', 'Upload a single JPG, PNG, WEBP or PDF in the "receipt" field.');
+        return fail(req, res, 400, 'Invalid file', msgs.invalid.code, msgs.invalid.title, msgs.invalid.message);
       }
       return fail(req, res, 400, 'Upload failed', 'UPLOAD_ERROR', 'Upload failed', err.message);
     }
@@ -59,9 +73,20 @@ export const uploadReceipt = (req, res, next) => {
   });
 };
 
+export const uploadReceipt = wrapSingle(receiptUpload, 'receipt', {
+  tooLarge: { code: 'RECEIPT_TOO_LARGE', title: 'Receipt too large', message: 'The receipt must be 5MB or smaller.' },
+  invalid: { code: 'INVALID_RECEIPT', title: 'Invalid receipt', message: 'Upload a single JPG, PNG, WEBP or PDF in the "receipt" field.' },
+});
+
+export const uploadProfileImage = wrapSingle(profileUpload, 'profileImage', {
+  tooLarge: { code: 'PROFILE_IMAGE_TOO_LARGE', title: 'Image too large', message: 'The profile image must be 3MB or smaller.' },
+  invalid: { code: 'INVALID_PROFILE_IMAGE', title: 'Invalid image', message: 'Upload a single JPG, PNG or WEBP in the "profileImage" field.' },
+});
+
 // The file is written to disk before the handler runs, so every validation
-// failure (404, 409, ...) would otherwise leave an orphaned receipt behind.
+// failure (404, 409, ...) would otherwise leave an orphaned file behind.
 // Delete the file whenever the response ends with an error status.
+// Works for any single-file upload (receipt or profileImage) via req.file.
 export const cleanupOnError = (req, res, next) => {
   res.on('finish', () => {
     if (res.statusCode >= 400) cleanupFiles(req.file);
@@ -76,9 +101,16 @@ export const deleteFile = async (filePath) => {
     await fs.unlink(path.join(__dirname, '..', filePath));
     return true;
   } catch (error) {
-    console.error('Error deleting file:', error);
+    if (error.code !== 'ENOENT') console.error('Error deleting file:', error);
     return false;
   }
+};
+
+// Deletes a stored profile image by its public URL. Refuses anything outside
+// /media/profiles/ so a bad DB value can never delete an unrelated file.
+export const deleteProfileImage = async (url) => {
+  if (!url || !url.startsWith(`/media/${PROFILE_FOLDER}/`) || url.includes('..')) return false;
+  return deleteFile(url);
 };
 
 // Accepts a single file object (req.file), an array, or a multer fields object

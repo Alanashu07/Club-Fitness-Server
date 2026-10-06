@@ -6,7 +6,9 @@ import checkinService from '../device/checkin.service.js';
 import commandQueue from '../device/device-command-queue.service.js';
 import env from '../../config/env.js';
 import { fail } from '../../validators/error.handler.js';
-import { getFileUrl } from '../../config/multer.js';
+import { getFileUrl, deleteProfileImage } from '../../config/multer.js';
+import { randomUUID } from 'crypto';
+import offerService, { OfferError } from '../offer/offer.service.js';
 
 const FEE_STATUS_SORT_ORDER = { overdue: 0, pending: 1, paid: 2 };
 const WEEKLY_OFF_DAYS = [0];
@@ -25,6 +27,18 @@ const fetchHolidays = (from, to) =>
 function asyncHandler(fn) {
     return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 }
+
+const tryResolveOffer = async (req, res, args) => {
+    try {
+        return await offerService.resolveOffer(prisma, args);
+    } catch (err) {
+        if (err instanceof OfferError) {
+            fail(req, res, err.status, err.error, err.code, err.title, err.message);
+            return undefined;
+        }
+        throw err;
+    }
+};
 
 const getNextDevicePin = async function () {
     const result = await prisma.user.aggregate({ _max: { devicePin: true } });
@@ -125,6 +139,7 @@ const listMembers = asyncHandler(async (req, res) => {
             phone: true,
             email: true,
             status: true,
+            profileImageUrl: true,
             membershipStart: true,
             membershipEnd: true,
             membershipPlan: { select: { id: true, name: true } },
@@ -176,6 +191,7 @@ const listMembers = asyncHandler(async (req, res) => {
             id: u.id,
             name: u.name,
             phone: u.phone,
+            profileImageUrl: u.profileImageUrl,
             email: u.email,
             plan: u.membershipPlan?.name || 'No Plan',
             planId: u.membershipPlan?.id || null,
@@ -248,6 +264,8 @@ const createMember = asyncHandler(async (req, res) => {
         trainerId,
         startDate,
         role = 'MEMBER',
+        offerId, offerCode,                 // NEW: optional offer
+        paidAmount, paymentMethod, notes,   // were referenced but missing
     } = req.body;
 
     // Only MEMBER requires a membership plan
@@ -355,6 +373,15 @@ const createMember = asyncHandler(async (req, res) => {
         }
     }
 
+    let offerQuote = null;
+    if (role === 'MEMBER' && (offerId || offerCode)) {
+        offerQuote = await tryResolveOffer(req, res, { offerId, offerCode, plan, context: 'NEW_MEMBER' });
+        if (!offerQuote) return; // failure already sent
+    }
+    if (paymentMethod && !PAYMENT_METHODS.includes(paymentMethod)) {
+        return res.status(400).json({ error: 'Invalid payment method', code: 'INVALID_PAYMENT_METHOD' });
+    }
+
     const membershipStart =
         role === 'MEMBER'
             ? (startDate ? new Date(startDate) : new Date())
@@ -379,6 +406,38 @@ const createMember = asyncHandler(async (req, res) => {
         membershipEnd.setDate(
             membershipEnd.getDate() + plan.durationDays
         );
+    }
+
+    // ── Initial fee record data (MEMBER only) ──
+    const now = new Date();
+    const isAdmin = req.user?.role === 'ADMIN';
+    let feeData = null;
+
+    if (role === 'MEMBER') {
+        const price = offerQuote ? offerQuote.finalAmount : Number(plan.price);
+
+        // Default kept: admin-created = fully paid, staff-created = unpaid.
+        // An explicit paidAmount overrides it.
+        const paid = paidAmount !== undefined && paidAmount !== '' ? Number(paidAmount) : (isAdmin ? price : 0);
+
+        if (Number.isNaN(paid) || paid < 0) { /* unchanged 400 */ }
+
+        feeData = {
+            planId: plan.id,
+            amount: price,                                   // net of discount
+            discountAmount: offerQuote?.discountAmount ?? null,
+            paidAmount: paid > 0 ? paid : null,
+            status: paid >= price ? 'PAID' : paid > 0 ? 'PARTIAL' : 'PENDING',
+            dueDate: membershipStart,
+            paidDate: paid > 0 ? now : null,
+            paymentMethod: paid > 0 ? (paymentMethod || 'CASH') : null, // was `'CASH' || null`
+            notes: notes || null,
+            approvedById: paid > 0 && isAdmin ? req.user.id : null,
+            approvedDate: paid > 0 ? now : null,
+            periodStart: membershipStart,
+            periodEnd: membershipEnd,
+            appliedAt: now,
+        };
     }
 
     const initialStatus =
@@ -412,66 +471,39 @@ const createMember = asyncHandler(async (req, res) => {
         });
     }
 
-    const member = await prisma.user.create({
-        data: {
-            name,
-            phone,
-            email,
-            passwordHash,
-            dateOfBirth: dateOfBirth
-                ? new Date(dateOfBirth)
-                : null,
+    const profileImageUrl = req.file ? getFileUrl('profiles', req.file.filename) : null;
 
-            role,
-            status: initialStatus,
-
-            membershipPlanId: plan?.id ?? null,
-            membershipStart,
-            membershipEnd,
-
-            devicePin,
-            deviceSN,
-
-            assignedTrainerId: trainerId || null,
-
-            ...(role === 'MEMBER' && plan
-                ? {
-                    feeRecords: {
-                        create: {
-                            planId: plan.id,
-                            amount: plan.price,
-                            status: req.user?.role === 'ADMIN' ? 'PAID' : 'PENDING',
-                            dueDate: membershipStart,
-                        },
-                    },
-                }
-                : {}),
-        },
-
-        select: {
-            id: true,
-            name: true,
-            phone: true,
-            email: true,
-            role: true,
-            status: true,
-            membershipStart: true,
-            membershipEnd: true,
-
-            membershipPlan: {
-                select: {
-                    id: true,
-                    name: true,
-                },
+    const member = await prisma.$transaction(async (tx) => {
+        const created = await tx.user.create({
+            data: {
+                name, phone, email, passwordHash,
+                dateOfBirth: dateOfBirth ? new Date(dateOfBirth) : null,
+                profileImageUrl,
+                role, status: initialStatus,
+                membershipPlanId: plan?.id ?? null,
+                membershipStart, membershipEnd,
+                devicePin, deviceSN,
+                assignedTrainerId: trainerId || null,
+                ...(feeData ? { feeRecords: { create: feeData } } : {}),
             },
-
-            assignedTrainer: {
-                select: {
-                    id: true,
-                    name: true,
-                },
+            select: {
+                id: true, name: true, phone: true, email: true, role: true, status: true,
+                membershipStart: true, membershipEnd: true, profileImageUrl: true,
+                membershipPlan: { select: { id: true, name: true } },
+                assignedTrainer: { select: { id: true, name: true } },
+                feeRecords: { select: { id: true } }, // NEW: need the fee id to link the offer
             },
-        },
+        });
+
+        if (offerQuote) {
+            await offerService.recordRedemption(tx, {
+                quote: offerQuote,
+                userId: created.id,
+                feeRecordId: created.feeRecords[0].id,
+                source: 'NEW_MEMBER',
+            });
+        }
+        return created;
     });
 
     res.status(201).json({
@@ -481,6 +513,8 @@ const createMember = asyncHandler(async (req, res) => {
             phone: member.phone,
             email: member.email,
             role: member.role,
+
+            profileImageUrl: member.profileImageUrl,
 
             plan: member.membershipPlan?.name || 'No Plan',
             planId: member.membershipPlan?.id || null,
@@ -500,13 +534,16 @@ const createMember = asyncHandler(async (req, res) => {
             checkedInToday: false,
             workoutStreak: 0,
 
-            feeStatus: role === 'MEMBER'
-                ? req.user?.role === 'ADMIN' ? 'paid' : 'pending'
-                : null,
+            feeStatus: feeData ? mapFeeStatus(feeData.status) : null,
 
             amount: plan ? Number(plan.price) : null,
 
             devicePin,
+            feeStatus: feeData ? mapFeeStatus(feeData.status) : null,
+            amount: feeData ? Number(feeData.amount) : null,       // net amount owed
+            originalAmount: plan ? Number(plan.price) : null,
+            discountAmount: feeData?.discountAmount ?? 0,
+            offer: offerQuote ? { id: offerQuote.offer.id, name: offerQuote.offer.name } : null,
         },
     });
 
@@ -559,23 +596,26 @@ const getAllTrainers = asyncHandler(async (req, res) => {
 });
 
 const getAllMembershipPlans = asyncHandler(async (req, res) => {
-    const { includeInactive } = req.query;
+    const { includeInactive, includeOffers = 'true', context } = req.query;
 
     const plans = await prisma.membershipPlan.findMany({
         where: includeInactive === 'true' ? {} : { isActive: true },
         select: {
-            id: true,
-            name: true,
-            durationDays: true,
-            price: true,
-            description: true,
-            features: true,
-            isActive: true,
+            id: true, name: true, durationDays: true, price: true,
+            description: true, features: true, isActive: true,
         },
         orderBy: { price: 'asc' },
     });
 
-    res.json({ plans: plans.map((p) => ({ ...p, price: Number(p.price) })) });
+    const active = includeOffers === 'false' ? [] : await offerService.listActiveOffers(prisma, { context });
+
+    res.json({
+        plans: plans.map((p) => ({
+            ...p,
+            price: Number(p.price),
+            offers: offerService.offersForPlan(active, p),
+        })),
+    });
 });
 
 const createMembershipPlan = asyncHandler(async (req, res) => {
@@ -718,13 +758,18 @@ const getMemberDetails = asyncHandler(async (req, res) => {
 
     const workoutStreak = computeStreak(attendanceDates, today, isOffDay);
     const checkedInToday = attendanceDates.has(today.toDateString());
+    const offerRedemptions = await prisma.userOffer.findMany({
+        where: { userId: id },
+        orderBy: { redeemedAt: 'desc' },
+        include: { offer: { select: { id: true, name: true, code: true } } },
+    });
     res.json({
         member: {
             ...member,
             assignedTrainer: trainer?.name || 'Unassigned',
             workoutStreak,
             checkedInToday,
-        }, attendance, feeHistory
+        }, attendance, feeHistory, offerRedemptions
     });
 });
 
@@ -820,11 +865,17 @@ const updateMember = asyncHandler(async (req, res) => {
         }
     }
 
+    let profileImageUrl;
+    const removeImage = req.body.removeProfileImage === true || req.body.removeProfileImage === 'true';
+    if (req.file) profileImageUrl = getFileUrl('profiles', req.file.filename);
+    else if (removeImage) profileImageUrl = null;
+
     const updated = await prisma.user.update({
         where: { id },
         data: {
             name: name?.trim() || undefined,
             phone: normalizedPhone || undefined,
+            profileImageUrl,
             email: normalizedEmail,
             dateOfBirth: parsedDob,
             assignedTrainerId: trainerId === undefined ? undefined : (trainerId || null),
@@ -841,6 +892,7 @@ const updateMember = asyncHandler(async (req, res) => {
             id: true,
             name: true,
             phone: true,
+            profileImageUrl: true,
             email: true,
             status: true,
             membershipStart: true,
@@ -851,6 +903,10 @@ const updateMember = asyncHandler(async (req, res) => {
             assignedTrainer: { select: { id: true, name: true } },
         },
     });
+
+    if (profileImageUrl !== undefined && member.profileImageUrl && member.profileImageUrl !== profileImageUrl) {
+    deleteProfileImage(member.profileImageUrl); // best effort, errors are logged inside
+}
 
     // Keep the biometric device's display name in sync
     if (name && name.trim() !== member.name && updated.deviceSN && updated.devicePin) {
@@ -937,6 +993,7 @@ const deleteMember = asyncHandler(async (req, res) => {
 
             // Required FKs (default onDelete = Restrict): must be removed first.
             // FeeReminder and OrderItem are removed via their onDelete: Cascade.
+            prisma.userOffer.deleteMany({ where: { userId: id } }),
             prisma.feeRecord.deleteMany({ where: { memberId: id } }),
             prisma.productOrder.deleteMany({ where: { memberId: id } }),
             prisma.workoutAssignment.deleteMany({ where: { memberId: id } }),
@@ -951,6 +1008,7 @@ const deleteMember = asyncHandler(async (req, res) => {
             // RotationToken is onDelete: Cascade, so it goes with the user
             prisma.user.delete({ where: { id } }),
         ]);
+        await deleteProfileImage(member.profileImageUrl);
     } catch (err) {
         if (err.code === 'P2003') {
             return fail(req, res, 409, 'Member is still referenced', 'MEMBER_DELETE_CONSTRAINT', 'Cannot permanently delete', 'Other records still reference this member. De-activate the user instead.');
@@ -1057,7 +1115,7 @@ const PAYMENT_METHODS = ['CASH', 'UPI', 'BANK_TRANSFER', 'OTHER'];
 // body: { planId?, startDate?, paidAmount?, paymentMethod?, notes? }
 const renewMembership = asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const { planId, paidAmount, paymentMethod, notes } = req.body ?? {};
+    const { planId, paidAmount, paymentMethod, notes, waiveRemaining = false, offerId, offerCode } = req.body ?? {};
     const startOverride = req.body?.startDate ?? req.query.startDate;
 
     const member = await prisma.user.findUnique({ where: { id } });
@@ -1127,38 +1185,98 @@ const renewMembership = asyncHandler(async (req, res) => {
     if (paymentMethod && !PAYMENT_METHODS.includes(paymentMethod)) {
         return fail(req, res, 400, 'Invalid payment method', 'INVALID_PAYMENT_METHOD', 'Invalid payment method', `paymentMethod must be one of ${PAYMENT_METHODS.join(', ')}.`);
     }
-    const price = Number(plan.price);
-    const status = paid >= price ? 'PAID' : paid > 0 ? 'PARTIAL' : 'PENDING';
 
-    const fee = await prisma.$transaction(async (tx) => {
-        const isAdmin = req.user?.role === 'ADMIN';
-        const created = await tx.feeRecord.create({
+    let offerQuote = null;
+    if (offerId || offerCode) {
+        offerQuote = await tryResolveOffer(req, res, {
+            offerId, offerCode, plan, memberId: id, context: 'RENEWAL',
+        });
+        if (!offerQuote) return;
+    }
+    const price = offerQuote ? offerQuote.finalAmount : Number(plan.price);
+    // multipart bodies send booleans as strings
+    const waive = waiveRemaining === true || waiveRemaining === 'true';
+    const isAdmin = req.user?.role === 'ADMIN';
+    const partial = paid > 0 && paid < price;
+
+    const { feeRecords, mainFee } = await prisma.$transaction(async (tx) => {
+        const now = new Date();
+        const receiptImageUrl = req.file ? getFileUrl('receipts', req.file.filename) : null;
+        const created = [];
+
+        // The main record always carries the membership period and is what
+        // applyRenewal() acts on.
+        const main = await tx.feeRecord.create({
             data: {
                 memberId: id,
                 planId: plan.id,
-                amount: plan.price,
+                // Partial payment: this record covers only what was paid.
+                amount: partial ? paid : plan.price,
+                discountAmount: offerQuote?.discountAmount ?? null,
                 paidAmount: paid > 0 ? paid : null,
-                status,
+                status: partial
+                    ? 'PAID'
+                    : paid >= price ? 'PAID'
+                        : waive ? 'WAIVED'   // nothing paid, whole amount waived
+                            : 'PENDING',
                 dueDate: periodStart,
                 paidDate: paid > 0 ? now : null,
                 paymentMethod: paid > 0 ? paymentMethod || null : null,
                 notes: notes || null,
-                receiptImageUrl: req.file ? getFileUrl('receipts', req.file.filename) : null,
-                approvedById: isAdmin ? req.user.id : null,
-                approvedDate: paid > 0 ? now : null,
+                receiptImageUrl,
+                approvedById: isAdmin && (paid > 0 || waive) ? req.user.id : null,
+                approvedDate: paid > 0 || waive ? now : null,
                 periodStart,
                 periodEnd,
+                renewalGroupId: partial ? randomUUID() : null,
+                createdAt: now,
             },
         });
+        created.push(main);
+        if (offerQuote) {
+            await offerService.recordRedemption(tx, {
+                quote: offerQuote, userId: id, feeRecordId: main.id, source: 'RENEWAL',
+            });
+        }
 
-        // Starts today or earlier (expired member / backdated override): apply right away
-        if (periodStart <= now) await applyRenewal(tx, created.id);
+        // Partial payment: second record for the remainder (pending or waived)
+        if (partial) {
+            const remainder = Math.round((price - paid) * 100) / 100;
+            const rest = await tx.feeRecord.create({
+                data: {
+                    memberId: id,
+                    planId: plan.id,
+                    amount: remainder,
+                    paidAmount: null,
+                    status: waive ? 'WAIVED' : 'PENDING',
+                    dueDate: periodStart,
+                    paidDate: null,
+                    paymentMethod: null,
+                    notes: notes || null,
+                    approvedById: waive && isAdmin ? req.user.id : null,
+                    approvedDate: waive ? now : null,
+                    // No period: this record never changes the membership, so
+                    // applyDueRenewals (which requires periodStart) ignores it.
+                    periodStart: null,
+                    periodEnd: null,
+                    appliedAt: now,
+                    renewalGroupId: main.renewalGroupId,
+                    // +1ms so it is strictly the newest record. listMembers uses
+                    // the latest record for feeStatus, so it shows pending/paid correctly.
+                    createdAt: new Date(now.getTime() + 1),
+                },
+            });
+            created.push(rest);
+        }
 
-        return created;
+        // Starts today or earlier: apply right away
+        if (periodStart <= now) await applyRenewal(tx, main.id);
+
+        return { feeRecords: created, mainFee: main };
     });
 
     const [updatedFee, updatedMember] = await Promise.all([
-        prisma.feeRecord.findUnique({ where: { id: fee.id } }),
+        prisma.feeRecord.findUnique({ where: { id: mainFee.id } }),
         prisma.user.findUnique({
             where: { id },
             select: { id: true, status: true, membershipPlanId: true, membershipStart: true, membershipEnd: true },
@@ -1166,8 +1284,12 @@ const renewMembership = asyncHandler(async (req, res) => {
     ]);
 
     return res.status(201).json({
-        feeRecord: updatedFee,
+        feeRecord: updatedFee,   // main record, kept for backward compatibility
+        feeRecords,              // all records created (1 or 2)
         member: updatedMember,
+        discount: offerQuote
+            ? { offerId: offerQuote.offer.id, name: offerQuote.offer.name, discountAmount: offerQuote.discountAmount, finalAmount: offerQuote.finalAmount }
+            : null,
         applied: updatedFee.appliedAt !== null,
         message: updatedFee.appliedAt
             ? 'Membership renewed and active now.'
@@ -1175,4 +1297,134 @@ const renewMembership = asyncHandler(async (req, res) => {
     });
 });
 
-export default { listMembers, getMemberDetails, createMember, updateMember, getAllTrainers, getAllMembershipPlans, createMembershipPlan, updateMembershipPlan, deleteMembershipPlan, reactivateMember, suspendMember, deleteMember, renewMembership, applyDueRenewals };
+// ── DELETE /api/v1/admin/members/:id/renew/last ─────────────────────────────
+// Reverts the most recent renewal for a member:
+//  - Queued renewal (not applied yet): the fee record is deleted; the member is untouched.
+//  - Applied renewal: the fee record is deleted and the member's plan / start / end /
+//    status are restored from the previous fee record.
+// Only renewal records (periodStart set) are eligible, so the initial fee record
+// created in createMember can never be reverted by this endpoint.
+const revertLastRenewal = asyncHandler(async (req, res) => {
+    const { id } = req.params;
+
+    const member = await prisma.user.findUnique({ where: { id } });
+    if (!member) {
+        return fail(req, res, 404, 'Member not found', 'MEMBER_NOT_FOUND', 'Member not found', 'No member exists with this id.');
+    }
+    if (member.role !== 'MEMBER') {
+        return fail(req, res, 400, 'Not a member', 'NOT_A_MEMBER', 'Cannot revert', 'Only users with the "MEMBER" role have memberships.');
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+        // Re-read inside the transaction so the member state is consistent with the delete
+        const current = await tx.user.findUnique({ where: { id } });
+
+        const last = await tx.feeRecord.findFirst({
+            where: { memberId: id, periodStart: { not: null } },
+            orderBy: { createdAt: 'desc' },
+        });
+        if (!last) return { error: 'NO_RENEWAL' };
+        const deleteRenewal = async () => {
+            const ids = last.renewalGroupId
+                ? (await tx.feeRecord.findMany({ where: { renewalGroupId: last.renewalGroupId }, select: { id: true } })).map((r) => r.id)
+                : [last.id];
+
+            await offerService.releaseRedemptions(tx, ids); // decrements Offer.redemptionCount, deletes UserOffer rows
+
+            if (last.renewalGroupId) {
+                await tx.feeRecord.deleteMany({ where: { renewalGroupId: last.renewalGroupId } });
+            } else {
+                await tx.feeRecord.delete({ where: { id: last.id } });
+            }
+        };
+
+        // Queued renewal: nothing was applied to the member, just remove it
+        if (!last.appliedAt) {
+            await deleteRenewal();
+            return { reverted: last, member: current, restored: false };
+        }
+
+        // Applied renewal: find the record to roll back to
+        const previous = await tx.feeRecord.findFirst({
+            where: { memberId: id, id: { not: last.id } },
+            orderBy: { createdAt: 'desc' },
+            include: { plan: { select: { id: true, name: true, durationDays: true } } },
+        });
+        if (!previous) return { error: 'NO_PREVIOUS_RECORD' };
+
+        // Fee records created by createMember have no periodStart/periodEnd,
+        // so derive them from dueDate + plan duration.
+        const prevStart = previous.periodStart ?? previous.dueDate;
+        const prevEnd =
+            previous.periodEnd ??
+            (prevStart && previous.plan ? addDays(prevStart, previous.plan.durationDays) : null);
+        if (!prevStart || !prevEnd) return { error: 'PREVIOUS_PERIOD_UNKNOWN' };
+
+        // Re-derive status from the restored end date. SUSPENDED is an admin
+        // decision and is never overwritten.
+        let status;
+        if (current.status !== 'SUSPENDED') {
+            if (prevEnd < new Date()) status = 'EXPIRED';
+            else status = previous.plan?.name?.toLowerCase().includes('trial') ? 'TRIAL' : 'ACTIVE';
+        }
+
+        await deleteRenewal();
+
+        const updated = await tx.user.update({
+            where: { id },
+            data: {
+                membershipPlanId: previous.planId,
+                membershipStart: prevStart,
+                membershipEnd: prevEnd,
+                ...(status ? { status } : {}),
+            },
+            select: {
+                id: true,
+                name: true,
+                status: true,
+                membershipPlanId: true,
+                membershipStart: true,
+                membershipEnd: true,
+            },
+        });
+
+        return { reverted: last, member: updated, restored: true, restoredFrom: previous };
+    });
+
+    if (result.error === 'NO_RENEWAL') {
+        return fail(req, res, 404, 'No renewal found', 'NO_RENEWAL', 'Nothing to revert', 'This member has no renewal to revert.');
+    }
+    if (result.error === 'NO_PREVIOUS_RECORD') {
+        return fail(req, res, 409, 'No previous record', 'NO_PREVIOUS_RECORD', 'Cannot revert', 'There is no earlier fee record to restore the membership from.');
+    }
+    if (result.error === 'PREVIOUS_PERIOD_UNKNOWN') {
+        return fail(req, res, 409, 'Previous period unknown', 'PREVIOUS_PERIOD_UNKNOWN', 'Cannot revert', 'The previous fee record has no usable membership period.');
+    }
+
+    return res.json({
+        revertedFeeRecordId: result.reverted.id,
+        member: result.member,
+        restoredFromFeeRecordId: result.restoredFrom?.id ?? null,
+        message: result.restored
+            ? 'Last renewal reverted and previous membership restored.'
+            : 'Queued renewal removed. Current membership was not affected.',
+    });
+});
+
+export default {
+    listMembers,
+    getMemberDetails,
+    createMember,
+    updateMember,
+    getAllTrainers,
+    getAllMembershipPlans,
+    createMembershipPlan,
+    updateMembershipPlan,
+    deleteMembershipPlan,
+    reactivateMember,
+    suspendMember,
+    deleteMember,
+    renewMembership,
+    revertLastRenewal,
+    applyDueRenewals
+};

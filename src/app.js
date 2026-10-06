@@ -24,9 +24,9 @@ app.use(cookieParser());
 app.use(express.json());
 app.use('/media', express.static(mediaDir));
 app.use((req, res, next) => {
-  console.log(`[RAW REQUEST] ${req.method} ${req.originalUrl} from ${req.ip}`);
-  console.log('Headers:', req.headers);
-  next();
+    console.log(`[RAW REQUEST] ${req.method} ${req.originalUrl} from ${req.ip}`);
+    console.log('Headers:', req.headers);
+    next();
 });
 
 // API version prefix
@@ -42,6 +42,7 @@ export const registerApiRoutes = async (app) => {
     const { default: reportRoutes } = await import('./modules/report/report.routes.js');
     const { default: feeRoutes } = await import('./modules/fees/fees.router.js');
     const { default: deviceRoutes } = await import('./modules/device/device.routes.js');
+    const { default: offerRoutes } = await import('./modules/offer/offer.routes.js');
 
     // API Routes
     app.use(`/`, deviceRoutes);
@@ -51,6 +52,7 @@ export const registerApiRoutes = async (app) => {
     app.use(`${API_PREFIX}/workouts`, workoutsRoutes);
     app.use(`${API_PREFIX}/report`, reportRoutes);
     app.use(`${API_PREFIX}/fees`, feeRoutes);
+    app.use(`${API_PREFIX}/offers`, offerRoutes);
     startCronJob();
 
     // Health check endpoint

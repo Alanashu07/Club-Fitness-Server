@@ -177,6 +177,7 @@ model User {
   badges               UserBadge[]
   documentsUploaded    Document[]           @relation("DocumentUploader")
   rotationTokens       RotationToken[]
+  offerRedemptions     UserOffer[]
 
   @@index([role])
   @@index([status])
@@ -193,6 +194,7 @@ model MembershipPlan {
   isActive     Boolean  @default(true)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+  offers       Offer[]
 
   members    User[]      @relation("MemberPlan")
   feeRecords FeeRecord[]
@@ -231,6 +233,89 @@ model OtpToken {
   @@index([email])
 }
 
+enum OfferDiscountType {
+  PERCENTAGE
+  FLAT
+}
+
+// When the offer can be used
+enum OfferAppliesTo {
+  NEW_MEMBER // only when creating a member
+  RENEWAL // only when renewing
+  BOTH
+}
+
+enum RedemptionSource {
+  NEW_MEMBER
+  RENEWAL
+}
+
+// ── Offer: created by admin, linked to membership plans ─────────────────────
+
+model Offer {
+  id          String  @id @default(cuid())
+  name        String // "Diwali 20% off"
+  code        String? @unique // optional promo code, stored UPPERCASE
+  description String?
+
+  discountType      OfferDiscountType
+  discountValue     Decimal           @db.Decimal(10, 2) // % (0-100) or flat amount
+  maxDiscountAmount Decimal?          @db.Decimal(10, 2) // cap, mainly for PERCENTAGE
+
+  appliesTo OfferAppliesTo @default(BOTH)
+
+  // Plan linking. appliesToAllPlans = true ignores `plans`.
+  appliesToAllPlans Boolean          @default(false)
+  plans             MembershipPlan[]
+
+  validFrom  DateTime?
+  validUntil DateTime?
+
+  maxRedemptions  Int? // null = unlimited (total across all users)
+  perUserLimit    Int? @default(1) // null = unlimited per user
+  redemptionCount Int  @default(0)
+
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  redemptions UserOffer[]
+
+  @@index([isActive])
+  @@index([validUntil])
+}
+
+// ── UserOffer: an offer actually used by a user (one row per redemption) ────
+// Snapshot columns keep history correct even if the offer is edited later.
+
+model UserOffer {
+  id String @id @default(cuid())
+
+  user   User   @relation(fields: [userId], references: [id])
+  userId String
+
+  offer   Offer  @relation(fields: [offerId], references: [id])
+  offerId String
+
+  feeRecord   FeeRecord? @relation(fields: [feeRecordId], references: [id], onDelete: Cascade)
+  feeRecordId String?    @unique
+
+  source RedemptionSource
+
+  offerName      String
+  discountType   OfferDiscountType
+  discountValue  Decimal           @db.Decimal(10, 2)
+  originalAmount Decimal           @db.Decimal(10, 2) // plan price before discount
+  discountAmount Decimal           @db.Decimal(10, 2)
+  finalAmount    Decimal           @db.Decimal(10, 2) // what the member owes
+
+  redeemedAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([offerId])
+  @@index([userId, offerId])
+}
+
 
 // ============================================================================
 // FEES & PAYMENTS
@@ -262,12 +347,16 @@ model FeeRecord {
 
   remindersSent FeeReminder[]
 
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  periodStart DateTime?
-  periodEnd   DateTime?
-  appliedAt   DateTime?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+  periodStart    DateTime?
+  periodEnd      DateTime?
+  appliedAt      DateTime?
+  renewalGroupId String?
+  discountAmount Decimal?   @db.Decimal(10, 2)
+  userOffer      UserOffer?
 
+  @@index([renewalGroupId])
   @@index([appliedAt, periodStart])
   @@index([memberId])
   @@index([status])
