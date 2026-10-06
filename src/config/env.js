@@ -69,4 +69,6 @@ export default {
   BLOCKED_DEVICE_GROUP_ID: process.env.BLOCKED_DEVICE_GROUP_ID || '2',
   
   DEFAULT_DEVICE_GROUP_ID: process.env.DEFAULT_DEVICE_GROUP_ID || '1',
+
+  BASE_URL: process.env.BASE_URL,
 };

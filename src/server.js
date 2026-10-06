@@ -2,9 +2,11 @@ import env from './config/env.js';
 import app, { registerApiRoutes } from './app.js';
 import setupAdmin from './config/admin.js';
 
+const BASE_URL = env.BASE_URL || env.NODE_ENV === 'production' ? 'https://api.clubfitness.co.in' : `http://localhost:${env.PORT}`;
+
 const main = async () => {
   try {
-    console.log('🚀 Starting ToteBags backend...');
+    console.log('🚀 Starting Club Fitness backend...');
     console.log(`📌 Environment: ${env.NODE_ENV || 'development'}`);
     app.set('trust proxy', 1);
 
@@ -23,11 +25,14 @@ const main = async () => {
     // Start the server
     app.listen(env.PORT, "0.0.0.0", () => {
       console.log('\n✅ Server successfully started!');
-      console.log(`🌐 API Server: http://localhost:${env.PORT}/api/v1`);
+      console.log(`🌐 API Server: ${BASE_URL}/api/v1`);
       if (env.NODE_ENV !== 'production' || !process.env.VERCEL) {
-        console.log(`⚙️  Admin Panel: http://localhost:${env.PORT}/admin`);
+        console.log(`⚙️  Admin Panel: ${BASE_URL}/admin`);
       }
-      console.log(`📊 Health Check: http://localhost:${env.PORT}/api/v1/health`);
+      console.log(`📊 Health Check: ${BASE_URL}/api/v1/health`);
+      if(env.BASE_URL) {
+        console.log('🌐 Public URL: ', env.BASE_URL);
+      }
       console.log('\n📍 Available API Endpoints:');
       console.log('   - /api/v1/auth          - Authentication & User Profile');
       console.log('   - /api/v1/home          - Home Feed');
