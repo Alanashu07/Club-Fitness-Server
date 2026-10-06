@@ -440,7 +440,7 @@ const createMember = asyncHandler(async (req, res) => {
                         create: {
                             planId: plan.id,
                             amount: plan.price,
-                            status: 'PENDING',
+                            status: req.user?.role === 'ADMIN' ? 'PAID' : 'PENDING',
                             dueDate: membershipStart,
                         },
                     },
@@ -501,7 +501,7 @@ const createMember = asyncHandler(async (req, res) => {
             workoutStreak: 0,
 
             feeStatus: role === 'MEMBER'
-                ? 'pending'
+                ? req.user?.role === 'ADMIN' ? 'paid' : 'pending'
                 : null,
 
             amount: plan ? Number(plan.price) : null,
@@ -1061,14 +1061,15 @@ const renewMembership = asyncHandler(async (req, res) => {
         orderBy: { periodEnd: 'desc' },
         select: { periodEnd: true },
     });
-    const chainEnd = [member.membershipEnd, lastQueued?.periodEnd]
-        .filter(Boolean)
-        .reduce((a, b) => (a > b ? a : b), new Date(0));
+    const candidates = [member.membershipEnd, lastQueued?.periodEnd].filter(Boolean);
+    const chainEnd = candidates.length
+        ? candidates.reduce((a, b) => (a > b ? a : b))
+        : null; // null = no previous period
 
     const now = new Date();
     let periodStart;
     if (overrideDate) {
-        if (overrideDate < chainEnd) {
+        if (chainEnd && overrideDate < chainEnd) {
             return fail(
                 req, res, 409,
                 'Start date overlaps',
@@ -1080,9 +1081,13 @@ const renewMembership = asyncHandler(async (req, res) => {
         periodStart = overrideDate;
     } else {
         // Default: continue right after the current membership, or start now if it has lapsed
-        periodStart = chainEnd > now ? chainEnd : now;
+        periodStart = chainEnd ?? now;
     }
     const periodEnd = addDays(periodStart, plan.durationDays);
+    if (periodEnd <= now) {
+        return fail(req, res, 409, 'Renewal already elapsed', 'RENEWAL_ELAPSED', 'Renewal already elapsed',
+            'The renewal period would end in the past. Provide a startDate or choose a longer plan.');
+    }
 
     const paid = paidAmount ? Number(paidAmount) : 0;
     if (Number.isNaN(paid) || paid < 0) {
