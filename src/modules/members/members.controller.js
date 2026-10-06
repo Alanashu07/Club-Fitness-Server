@@ -440,7 +440,7 @@ const createMember = asyncHandler(async (req, res) => {
                         create: {
                             planId: plan.id,
                             amount: plan.price,
-                            status: 'PENDING',
+                            status: req.user?.role === 'ADMIN' ? 'PAID' : 'PENDING',
                             dueDate: membershipStart,
                         },
                     },
@@ -501,7 +501,7 @@ const createMember = asyncHandler(async (req, res) => {
             workoutStreak: 0,
 
             feeStatus: role === 'MEMBER'
-                ? 'pending'
+                ? req.user?.role === 'ADMIN' ? 'paid' : 'pending'
                 : null,
 
             amount: plan ? Number(plan.price) : null,
@@ -976,23 +976,54 @@ const applyRenewal = async (tx, feeId) => {
     });
     if (claimed.count === 0) return false;
 
-    const fee = await tx.feeRecord.findUnique({ where: { id: feeId } });
-
-    await tx.user.update({
-        where: { id: fee.memberId },
-        data: {
-            membershipPlanId: fee.planId,
-            membershipStart: fee.periodStart,
-            membershipEnd: fee.periodEnd,
-            graceEntriesUsed: 0,
-            contentAccessUntil: null,
+    // One read: fee + the member fields needed for every decision below
+    const fee = await tx.feeRecord.findUnique({
+        where: { id: feeId },
+        include: {
+            member: {
+                select: { status: true, blocked: true, deviceSN: true, devicePin: true },
+            },
         },
     });
+    const member = fee.member;
+
+    const membershipData = {
+        membershipPlanId: fee.planId,
+        membershipStart: fee.periodStart,
+        membershipEnd: fee.periodEnd,
+        graceEntriesUsed: 0,
+        contentAccessUntil: null,
+    };
+
     // Reactivate lapsed members, but never override a manual suspension
-    await tx.user.updateMany({
-        where: { id: fee.memberId, status: { in: ['EXPIRED', 'TRIAL'] } },
-        data: { status: 'ACTIVE' },
+    const lapsed = member.status === 'EXPIRED' || member.status === 'TRIAL';
+    // Only an ACTIVE (or just-reactivated) member gets unblocked
+    let shouldUnblock = (lapsed || member.status === 'ACTIVE') && member.blocked;
+
+    // One write: membership fields + status + blocked together.
+    // `status` in the where guards against a suspension that landed after our read.
+    const updated = await tx.user.updateMany({
+        where: { id: fee.memberId, status: member.status },
+        data: {
+            ...membershipData,
+            ...(lapsed && { status: 'ACTIVE' }),
+            ...(shouldUnblock && { blocked: false }),
+        },
     });
+
+    if (updated.count === 0) {
+        // Status changed between read and write (e.g. admin suspended the member).
+        // Apply the renewal fields only and leave status/blocked untouched.
+        await tx.user.update({
+            where: { id: fee.memberId },
+            data: membershipData,
+        });
+        shouldUnblock = false;
+    }
+
+    if (shouldUnblock) {
+        await checkinService.unblockUser(member.deviceSN, member.devicePin);
+    }
     return true;
 };
 
@@ -1061,14 +1092,15 @@ const renewMembership = asyncHandler(async (req, res) => {
         orderBy: { periodEnd: 'desc' },
         select: { periodEnd: true },
     });
-    const chainEnd = [member.membershipEnd, lastQueued?.periodEnd]
-        .filter(Boolean)
-        .reduce((a, b) => (a > b ? a : b), new Date(0));
+    const candidates = [member.membershipEnd, lastQueued?.periodEnd].filter(Boolean);
+    const chainEnd = candidates.length
+        ? candidates.reduce((a, b) => (a > b ? a : b))
+        : null; // null = no previous period
 
     const now = new Date();
     let periodStart;
     if (overrideDate) {
-        if (overrideDate < chainEnd) {
+        if (chainEnd && overrideDate < chainEnd) {
             return fail(
                 req, res, 409,
                 'Start date overlaps',
@@ -1080,9 +1112,13 @@ const renewMembership = asyncHandler(async (req, res) => {
         periodStart = overrideDate;
     } else {
         // Default: continue right after the current membership, or start now if it has lapsed
-        periodStart = chainEnd > now ? chainEnd : now;
+        periodStart = chainEnd ?? now;
     }
     const periodEnd = addDays(periodStart, plan.durationDays);
+    if (periodEnd <= now) {
+        return fail(req, res, 409, 'Renewal already elapsed', 'RENEWAL_ELAPSED', 'Renewal already elapsed',
+            'The renewal period would end in the past. Provide a startDate or choose a longer plan.');
+    }
 
     const paid = paidAmount ? Number(paidAmount) : 0;
     if (Number.isNaN(paid) || paid < 0) {
