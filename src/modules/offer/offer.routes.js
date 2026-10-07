@@ -7,11 +7,11 @@ const router = express.Router();
 router.use(authenticate);
 
 // ── Routes ──────────────────────────────────────────────────────────────────
-router.post('/offers', authorize('ADMIN', 'STAFF'), offers.createOffer);
-router.get('/offers', offers.listOffers);
-router.get('/offers/:id', offers.getOffer);
-router.patch('/offers/:id', authorize('ADMIN', 'STAFF'), offers.updateOffer);
-router.delete('/offers/:id', authorize('ADMIN', 'STAFF'), offers.deleteOffer);
-router.get('/membership-plans/:planId/offers', offers.listOffersForPlan);
+router.post('/', authorize('ADMIN', 'STAFF'), offers.createOffer);
+router.get('/', offers.listOffers);
+router.get('/:id', offers.getOffer);
+router.patch('/:id', authorize('ADMIN', 'STAFF'), offers.updateOffer);
+router.delete('/:id', authorize('ADMIN', 'STAFF'), offers.deleteOffer);
+router.get('/membership-plans/:planId', offers.listOffersForPlan);
 
 export default router;

@@ -249,6 +249,7 @@ const admin = new AdminJS({
         properties: {
           price: { type: 'currency', props: { currency: 'INR' } },
           features: { type: 'mixed' },
+          offers: { isVisible: false },
         },
         listProperties: ['id', 'name', 'durationDays', 'price', 'isActive'],
         filterProperties: ['name', 'isActive'],
@@ -265,6 +266,15 @@ const admin = new AdminJS({
         properties: {
           amount: { type: 'currency', props: { currency: 'INR' } },
           paidAmount: { type: 'currency', props: { currency: 'INR' } },
+          discountAmount: {
+            type: 'currency',
+            props: { currency: 'INR' },
+            isVisible: { list: true, filter: false, show: true, edit: true },
+          },
+          userOffer: {
+            isVisible: { list: false, filter: false, show: true, edit: false },
+            description: 'Offer redemption applied to this fee.',
+          },
           status: {
             availableValues: [
               { value: 'PENDING', label: 'Pending' },
@@ -286,7 +296,7 @@ const admin = new AdminJS({
           plan: { isVisible: { list: true, filter: true, show: true, edit: true } },
           approvedBy: { isVisible: { list: false, filter: true, show: true, edit: true } },
         },
-        listProperties: ['id', 'member', 'plan', 'amount', 'status', 'dueDate'],
+        listProperties: ['id', 'member', 'plan', 'amount', 'discountAmount', 'status', 'dueDate'],
         filterProperties: ['member', 'plan', 'status', 'dueDate'],
         sort: { sortBy: 'dueDate', direction: 'desc' },
       },
@@ -584,6 +594,161 @@ const admin = new AdminJS({
     },
 
     // ==================
+    // OFFERS (add under MARKETING)
+    // ==================
+    {
+      resource: { model: getDMMFModelByName('Offer'), client: prisma, dmmf: Prisma.dmmf },
+      options: {
+        navigation: { name: 'Marketing', icon: 'Tag' },
+        properties: {
+          name: { isTitle: true },
+          code: {
+            description: 'Optional promo code. Stored in UPPERCASE automatically.',
+          },
+          discountType: {
+            availableValues: [
+              { value: 'PERCENTAGE', label: 'Percentage (%)' },
+              { value: 'FLAT', label: 'Flat amount (₹)' },
+            ],
+          },
+          discountValue: {
+            description: 'Percentage (0-100) when type is PERCENTAGE, otherwise a flat rupee amount.',
+          },
+          maxDiscountAmount: {
+            type: 'currency',
+            props: { currency: 'INR' },
+            description: 'Cap on the discount. Mainly useful for PERCENTAGE offers.',
+          },
+          appliesTo: {
+            availableValues: [
+              { value: 'NEW_MEMBER', label: 'New member only' },
+              { value: 'RENEWAL', label: 'Renewal only' },
+              { value: 'BOTH', label: 'Both' },
+            ],
+          },
+          appliesToAllPlans: {
+            description: 'If enabled, the offer is valid for every plan and the linked plans are ignored.',
+          },
+          maxRedemptions: { description: 'Total redemptions across all users. Empty = unlimited.' },
+          perUserLimit: { description: 'Redemptions allowed per user. Empty = unlimited.' },
+          redemptionCount: {
+            isVisible: { list: true, filter: true, show: true, edit: false },
+          },
+          // Implicit many-to-many is not supported by @adminjs/prisma, so hide it
+          // and use the "Linked Plans" action below to inspect it.
+          plans: { isVisible: false },
+          redemptions: { isVisible: false },
+          createdAt: { isVisible: { list: false, filter: true, show: true, edit: false } },
+          updatedAt: { isVisible: { list: false, filter: false, show: true, edit: false } },
+        },
+        listProperties: [
+          'id', 'name', 'code', 'discountType', 'discountValue',
+          'appliesTo', 'validUntil', 'redemptionCount', 'isActive',
+        ],
+        filterProperties: ['name', 'code', 'discountType', 'appliesTo', 'isActive', 'validUntil'],
+        showProperties: [
+          'id', 'name', 'code', 'description',
+          'discountType', 'discountValue', 'maxDiscountAmount',
+          'appliesTo', 'appliesToAllPlans',
+          'validFrom', 'validUntil',
+          'maxRedemptions', 'perUserLimit', 'redemptionCount',
+          'isActive', 'createdAt', 'updatedAt',
+        ],
+        editProperties: [
+          'name', 'code', 'description',
+          'discountType', 'discountValue', 'maxDiscountAmount',
+          'appliesTo', 'appliesToAllPlans',
+          'validFrom', 'validUntil',
+          'maxRedemptions', 'perUserLimit', 'isActive',
+        ],
+        sort: { sortBy: 'createdAt', direction: 'desc' },
+        actions: {
+          new: {
+            before: async (request) => {
+              if (request.payload?.code) {
+                request.payload.code = request.payload.code.trim().toUpperCase();
+              }
+              return request;
+            },
+          },
+          edit: {
+            before: async (request) => {
+              if (request.payload?.code) {
+                request.payload.code = request.payload.code.trim().toUpperCase();
+              }
+              return request;
+            },
+          },
+
+          // Shows which plans the offer is linked to + redemption summary
+          linkedPlans: {
+            actionType: 'record',
+            icon: 'List',
+            label: 'Linked Plans',
+            component: false,
+            handler: async (request, response, context) => {
+              const { record, currentAdmin } = context;
+              const offer = await prisma.offer.findUnique({
+                where: { id: record.params.id },
+                include: { plans: { select: { name: true, price: true } } },
+              });
+
+              const message = offer.appliesToAllPlans
+                ? 'This offer applies to ALL plans.'
+                : offer.plans.length
+                  ? `Linked plans: ${offer.plans.map((p) => `${p.name} (₹${p.price})`).join(', ')}`
+                  : 'No plans linked yet (and "applies to all plans" is off).';
+
+              return {
+                record: record.toJSON(currentAdmin),
+                notice: { message, type: 'info' },
+              };
+            },
+          },
+        },
+      },
+    },
+    {
+      resource: { model: getDMMFModelByName('UserOffer'), client: prisma, dmmf: Prisma.dmmf },
+      options: {
+        navigation: { name: 'Marketing', icon: 'Percent' },
+        parent: { name: 'Marketing' },
+        properties: {
+          user: { isVisible: { list: true, filter: true, show: true, edit: false } },
+          offer: { isVisible: { list: true, filter: true, show: true, edit: false } },
+          feeRecord: { isVisible: { list: false, filter: true, show: true, edit: false } },
+          source: {
+            availableValues: [
+              { value: 'NEW_MEMBER', label: 'New member' },
+              { value: 'RENEWAL', label: 'Renewal' },
+            ],
+          },
+          discountType: {
+            availableValues: [
+              { value: 'PERCENTAGE', label: 'Percentage (%)' },
+              { value: 'FLAT', label: 'Flat amount (₹)' },
+            ],
+          },
+          originalAmount: { type: 'currency', props: { currency: 'INR' } },
+          discountAmount: { type: 'currency', props: { currency: 'INR' } },
+          finalAmount: { type: 'currency', props: { currency: 'INR' } },
+        },
+        listProperties: [
+          'id', 'user', 'offerName', 'source',
+          'originalAmount', 'discountAmount', 'finalAmount', 'redeemedAt',
+        ],
+        filterProperties: ['user', 'offer', 'source', 'redeemedAt'],
+        sort: { sortBy: 'redeemedAt', direction: 'desc' },
+        actions: {
+          // Redemptions are snapshots written by the server — view only.
+          new: { isAccessible: false },
+          edit: { isAccessible: false },
+          delete: { isAccessible: false },
+        },
+      },
+    },
+
+    // ==================
     // FACILITIES, EQUIPMENT & CLASSES
     // ==================
     {
@@ -775,6 +940,8 @@ const admin = new AdminJS({
           Announcement: { name: 'Announcement', navigation: 'Announcements' },
           DeviceCheckInEvent: { name: 'Check-In Event', navigation: 'Check-In Events' },
           DeviceCommand: { name: 'Device Command', navigation: 'Device Commands' },
+          Offer: { name: 'Offer', navigation: 'Offers' },
+          UserOffer: { name: 'Offer Redemption', navigation: 'Offer Redemptions' },
         },
       },
     },
