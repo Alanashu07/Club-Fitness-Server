@@ -1,7 +1,9 @@
 import PDFDocument from 'pdfkit';
 import dateUtil from '../../utils/date.js';
 import prisma from '../../config/db.js';
+import { getFileUrl } from '../../config/multer.js';
 import { sendReminderNotification } from '../../utils/notifications.js';
+import offerService from '../offer/offer.service.js';
 import {
     PAGE_MARGIN,
     formatCurrency,
@@ -16,26 +18,55 @@ function asyncHandler(fn) {
     return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 }
 
+// ── constants ───────────────────────────────────────────────────────────────
 const FEE_STATUS_SORT_ORDER = { overdue: 0, pending: 1, partial: 2, paid: 3, waived: 4 };
+const VALID_DB_STATUSES = ['PENDING', 'OVERDUE', 'PAID', 'PARTIAL', 'WAIVED'];
+// Same list the members API (renewMembership / createMember) validates against
+const PAYMENT_METHODS = ['CASH', 'UPI', 'BANK_TRANSFER', 'OTHER'];
+const UI_TO_DB_METHOD = { cash: 'CASH', upi: 'UPI', bankTransfer: 'BANK_TRANSFER', other: 'OTHER' };
+const DB_TO_UI_METHOD = { CASH: 'cash', UPI: 'upi', BANK_TRANSFER: 'bankTransfer', OTHER: 'other' };
+const REMINDER_CHANNELS = ['push', 'whatsapp', 'sms'];
+const SORT_KEYS = { duedate: 'dueDate', amount: 'amount', name: 'name', overduedays: 'overdueDays' };
 
-// ── DB enum (PENDING | OVERDUE | PAID | PARTIAL | WAIVED) -> UI status ─────
-const mapFeeStatus = function (status) {
-    return String(status || 'PENDING').toLowerCase();
+// ── helpers ─────────────────────────────────────────────────────────────────
+const failWith = (res, status, error, code, title, message) =>
+    res.status(status).json({ error, code, failure: { title, message, code: status } });
+
+const feeNotFound = (res) =>
+    failWith(res, 404, 'Fee record not found', 'FEE_NOT_FOUND', 'Fee record not found', 'This invoice no longer exists.');
+
+// Accepts DB values (CASH) or UI keys (bankTransfer). null = none, undefined = invalid.
+const normalizePaymentMethod = (m) => {
+    if (m === undefined || m === null || m === '') return null;
+    if (PAYMENT_METHODS.includes(m)) return m;
+    return UI_TO_DB_METHOD[m];
 };
 
-const mapPaymentMethod = function (method) {
-    if (!method) return null;
-    const map = { CASH: 'cash', UPI: 'upi', BANK_TRANSFER: 'bankTransfer', OTHER: 'other' };
-    return map[method] || 'other';
+// "Due Date" / "due_date" / "dueDate" all resolve to dueDate
+const normalizeSort = (s) => SORT_KEYS[String(s || '').replace(/[\s_-]/g, '').toLowerCase()] || 'dueDate';
+
+const parseDate = (v) => {
+    const d = new Date(v);
+    return Number.isNaN(d.getTime()) ? null : d;
 };
 
-const toDbPaymentMethod = function (method) {
-    const map = { cash: 'CASH', upi: 'UPI', bankTransfer: 'BANK_TRANSFER', other: 'OTHER' };
-    return map[method] || 'OTHER';
+const round2 = (n) => Math.round(n * 100) / 100;
+
+// A PENDING invoice whose due date has passed is overdue even if no cron has
+// flipped the DB status yet. This keeps the fee screen consistent with
+// members' listMembers (which shows the latest fee as overdue/pending).
+const effectiveStatus = (fee) => {
+    if (fee.status === 'PENDING' && fee.dueDate && new Date(fee.dueDate) < dateUtil.startOfToday()) {
+        return 'OVERDUE';
+    }
+    return fee.status;
 };
 
-// ── whole days between today and a past due date (0 if not overdue) ───────
-const overdueDaysFor = function (dueDate, status) {
+const mapFeeStatus = (status) => String(status || 'PENDING').toLowerCase();
+
+const mapPaymentMethod = (method) => (method ? DB_TO_UI_METHOD[method] || 'other' : null);
+
+const overdueDaysFor = (dueDate, status) => {
     if (status !== 'OVERDUE') return 0;
     const target = new Date(dueDate);
     target.setHours(0, 0, 0, 0);
@@ -43,203 +74,244 @@ const overdueDaysFor = function (dueDate, status) {
     return Math.max(0, Math.round(diffMs / 86400000));
 };
 
-const serializeFee = function (fee) {
-    return {
-        id: fee.id,
-        memberId: fee.memberId,
-        memberName: fee.member?.name || 'Unknown',
-        memberPhone: fee.member?.phone || null,
-        memberEmail: fee.member?.email || null,
-        plan: fee.plan?.name || fee.planNameSnapshot || 'No Plan',
-        planId: fee.planId || null,
-        amount: Number(fee.amount),
-        paidAmount: fee.paidAmount != null ? Number(fee.paidAmount) : null,
-        status: mapFeeStatus(fee.status),
-        dueDate: fee.dueDate,
-        paidDate: fee.paidDate,
-        paymentMethod: mapPaymentMethod(fee.paymentMethod),
-        receiptUrl: fee.receiptUrl || null,
-        notes: fee.notes || null,
-        overdueDays: overdueDaysFor(fee.dueDate, fee.status),
-        createdAt: fee.createdAt,
-        updatedAt: fee.updatedAt,
-    };
-};
-
 const FEE_SELECT = {
     id: true,
     memberId: true,
     planId: true,
     amount: true,
+    discountAmount: true,
     paidAmount: true,
     status: true,
     dueDate: true,
     paidDate: true,
     paymentMethod: true,
-    receiptImageUrl: true,
+    receiptImageUrl: true, // was `receiptUrl`, which is not the column members/renew writes to
     notes: true,
+    periodStart: true,
+    periodEnd: true,
+    appliedAt: true,
+    renewalGroupId: true,
+    approvedById: true,
+    approvedDate: true,
     createdAt: true,
     updatedAt: true,
     member: { select: { id: true, name: true, phone: true, email: true } },
     plan: { select: { id: true, name: true } },
 };
 
-// ── GET /api/admin/fees ──────────────────────────────────────────────────────
-// Query params:
-//   search     — matches member name, phone, or invoice id (case-insensitive)
-//   status     — All | Pending | Overdue | Paid | Partial | Waived (default All)
-//   memberId   — filter to one member
-//   planId     — filter to one membership plan
-//   sortBy     — dueDate | amount | name | overdueDays (default dueDate)
-//   page, limit — pagination (default page=1, limit=20)
-const listFees = asyncHandler(async (req, res) => {
-    const {
-        search = '',
-        status = 'All',
-        memberId,
-        planId,
-        sortBy = 'dueDate',
-        page = '1',
-        limit = '20',
-    } = req.query;
+const serializeFee = (fee) => {
+    const eff = effectiveStatus(fee);
+    const amount = Number(fee.amount);
+    const paid = fee.paidAmount != null ? Number(fee.paidAmount) : null;
+    const settled = eff === 'PAID' || eff === 'WAIVED';
+    return {
+        id: fee.id,
+        memberId: fee.memberId,
+        memberName: fee.member?.name || 'Unknown',
+        memberPhone: fee.member?.phone || null,
+        memberEmail: fee.member?.email || null,
+        plan: fee.plan?.name || 'No Plan',
+        planId: fee.planId || null,
+        amount,
+        discountAmount: fee.discountAmount != null ? Number(fee.discountAmount) : 0,
+        paidAmount: paid,
+        balance: settled ? 0 : Math.max(0, round2(amount - (paid || 0))),
+        status: mapFeeStatus(eff),
+        dueDate: fee.dueDate,
+        paidDate: fee.paidDate,
+        paymentMethod: mapPaymentMethod(fee.paymentMethod),
+        receiptUrl: fee.receiptImageUrl || null,
+        notes: fee.notes || null,
+        overdueDays: overdueDaysFor(fee.dueDate, eff),
+        // renewal info written by members' renewMembership / createMember
+        isRenewal: fee.periodStart != null,
+        periodStart: fee.periodStart,
+        periodEnd: fee.periodEnd,
+        applied: fee.appliedAt != null,
+        renewalGroupId: fee.renewalGroupId || null,
+        approvedById: fee.approvedById || null,
+        approvedDate: fee.approvedDate || null,
+        createdAt: fee.createdAt,
+        updatedAt: fee.updatedAt,
+    };
+};
 
+const buildWhere = ({ search = '', memberId, planId }) => {
     const where = {};
-
-    if (status && status !== 'All') {
-        where.status = status.toUpperCase();
-    }
-    if (memberId) {
-        where.memberId = memberId;
-    }
-    if (planId) {
-        where.planId = planId;
-    }
-    if (search.trim()) {
+    if (memberId) where.memberId = memberId;
+    if (planId) where.planId = planId;
+    const q = String(search || '').trim();
+    if (q) {
         where.OR = [
-            { id: { contains: search } },
-            { member: { name: { contains: search, mode: 'insensitive' } } },
-            { member: { phone: { contains: search } } },
-            { member: { id: { contains: search } } },
+            { id: { contains: q } },
+            { member: { name: { contains: q, mode: 'insensitive' } } },
+            { member: { phone: { contains: q } } },
+            { member: { id: { contains: q } } },
         ];
     }
+    return where;
+};
 
-    // Fetched in full (not paginated at the DB level) because overdueDays is
-    // computed, not stored, and sorting by it needs the value resolved first.
-    // Fine for gym-scale fee volumes; revisit with a stored `overdueDays`
-    // column or a cron-updated status if this ever needs to scale up.
-    const rows = await prisma.feeRecord.findMany({
-        where,
-        select: FEE_SELECT,
-        orderBy: { dueDate: 'asc' },
-    });
-
-    let fees = rows.map(serializeFee);
-
+const sortFees = (fees, sortBy) => {
     switch (sortBy) {
         case 'amount':
-            fees.sort((a, b) => b.amount - a.amount);
-            break;
+            return fees.sort((a, b) => b.amount - a.amount);
         case 'name':
-            fees.sort((a, b) => a.memberName.localeCompare(b.memberName));
-            break;
+            return fees.sort((a, b) => a.memberName.localeCompare(b.memberName));
         case 'overdueDays':
-            fees.sort((a, b) => b.overdueDays - a.overdueDays);
-            break;
+            return fees.sort((a, b) => b.overdueDays - a.overdueDays);
         default:
-            fees.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
+            // overdue/pending float up, then by due date
+            return fees.sort(
+                (a, b) =>
+                    (FEE_STATUS_SORT_ORDER[a.status] ?? 9) - (FEE_STATUS_SORT_ORDER[b.status] ?? 9) ||
+                    new Date(a.dueDate) - new Date(b.dueDate)
+            );
     }
+};
 
-    // secondary tie-break so overdue/pending naturally float up within a tab
-    fees.sort((a, b) => {
-        if (sortBy !== 'dueDate') return 0;
-        return FEE_STATUS_SORT_ORDER[a.status] - FEE_STATUS_SORT_ORDER[b.status];
+const countsOf = (list) => ({
+    total: list.length,
+    all: list.length,
+    pending: list.filter((f) => f.status === 'pending').length,
+    overdue: list.filter((f) => f.status === 'overdue').length,
+    paid: list.filter((f) => f.status === 'paid').length,
+    partial: list.filter((f) => f.status === 'partial').length,
+    waived: list.filter((f) => f.status === 'waived').length,
+});
+
+// collected counts any money received (incl. partial and partially-paid-then-waived);
+// outstanding is what is still owed on open invoices.
+const totalsOf = (fees) => {
+    const totalCollected = fees.reduce(
+        (sum, f) => sum + (f.paidAmount ?? (f.status === 'paid' ? f.amount : 0)),
+        0
+    );
+    const totalOutstanding = fees
+        .filter((f) => ['overdue', 'pending', 'partial'].includes(f.status))
+        .reduce((sum, f) => sum + f.balance, 0);
+    const totalPartialPaid = fees
+        .filter((f) => f.status === 'partial')
+        .reduce((sum, f) => sum + (f.paidAmount || 0), 0);
+    const billed = totalCollected + totalOutstanding;
+    return {
+        totalCollected: round2(totalCollected),
+        totalOutstanding: round2(totalOutstanding),
+        totalPartialPaid: round2(totalPartialPaid),
+        collectedProgress: billed > 0 ? Number((totalCollected / billed).toFixed(4)) : 0,
+    };
+};
+
+// Fetch everything matching the non-status filters, then filter by status in
+// memory: the "effective" status (pending past due => overdue) is computed.
+async function loadFees({ search, status = 'All', memberId, planId, sortBy }) {
+    const rows = await prisma.feeRecord.findMany({
+        where: buildWhere({ search, memberId, planId }),
+        select: FEE_SELECT,
     });
+    const matching = rows.map(serializeFee);
+    const wanted = String(status || 'All').toLowerCase();
+    const fees = !wanted || wanted === 'all' ? [...matching] : matching.filter((f) => f.status === wanted);
+    sortFees(fees, normalizeSort(sortBy));
+    return { matching, fees };
+}
+
+const loadFee = (id) => prisma.feeRecord.findUnique({ where: { id }, select: FEE_SELECT });
+
+// ── GET /api/admin/fees ──────────────────────────────────────────────────────
+// Query: search, status (All|Pending|Overdue|Paid|Partial|Waived), memberId,
+//        planId, sortBy (dueDate|amount|name|overdueDays), page, limit
+// `counts` are for ALL statuses under the search/member/plan filters, so tab
+// badges stay correct while a status tab is selected.
+const listFees = asyncHandler(async (req, res) => {
+    const { search = '', status = 'All', memberId, planId, sortBy = 'dueDate', page = '1', limit = '20' } = req.query;
+
+    const { matching, fees } = await loadFees({ search, status, memberId, planId, sortBy });
 
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
     const limitNum = Math.max(1, parseInt(limit, 10) || 20);
     const total = fees.length;
     const start = (pageNum - 1) * limitNum;
-    const paged = fees.slice(start, start + limitNum);
 
     res.json({
-        fees: paged,
+        fees: fees.slice(start, start + limitNum),
         pagination: { page: pageNum, limit: limitNum, total, totalPages: Math.ceil(total / limitNum) },
-        counts: {
-            all: rows.length,
-            pending: fees.filter((f) => f.status === 'pending').length,
-            overdue: fees.filter((f) => f.status === 'overdue').length,
-            paid: fees.filter((f) => f.status === 'paid').length,
-            partial: fees.filter((f) => f.status === 'partial').length,
-            waived: fees.filter((f) => f.status === 'waived').length,
-        },
+        counts: countsOf(matching),
     });
 });
 
 // ── GET /api/admin/fees/summary ─────────────────────────────────────────────
-// Powers the revenue overview card: collected vs outstanding, progress, etc.
+// Optional ?memberId= for a per-member summary.
 const getFeeSummary = asyncHandler(async (req, res) => {
-    const rows = await prisma.feeRecord.findMany({ select: FEE_SELECT });
-    const fees = rows.map(serializeFee);
-
-    const totalCollected = fees
-        .filter((f) => f.status === 'paid')
-        .reduce((sum, f) => sum + (f.paidAmount || f.amount), 0);
-
-    const totalOutstanding = fees
-        .filter((f) => ['overdue', 'pending', 'partial'].includes(f.status))
-        .reduce((sum, f) => sum + (f.amount - (f.paidAmount || 0)), 0);
-
-    const totalPartialPaid = fees
-        .filter((f) => f.status === 'partial')
-        .reduce((sum, f) => sum + (f.paidAmount || 0), 0);
-
-    const total = totalCollected + totalOutstanding;
-
-    res.json({
-        totalCollected,
-        totalOutstanding,
-        totalPartialPaid,
-        collectedProgress: total > 0 ? Number((totalCollected / total).toFixed(4)) : 0,
-        counts: {
-            total: fees.length,
-            pending: fees.filter((f) => f.status === 'pending').length,
-            overdue: fees.filter((f) => f.status === 'overdue').length,
-            paid: fees.filter((f) => f.status === 'paid').length,
-            partial: fees.filter((f) => f.status === 'partial').length,
-            waived: fees.filter((f) => f.status === 'waived').length,
-        },
+    const { memberId } = req.query;
+    const rows = await prisma.feeRecord.findMany({
+        where: memberId ? { memberId } : {},
+        select: FEE_SELECT,
     });
+    const fees = rows.map(serializeFee);
+    res.json({ ...totalsOf(fees), counts: countsOf(fees) });
 });
 
 // ── GET /api/admin/fees/:id ─────────────────────────────────────────────────
 const getFeeById = asyncHandler(async (req, res) => {
-    const fee = await prisma.feeRecord.findUnique({ where: { id: req.params.id }, select: FEE_SELECT });
-    if (!fee) {
-        const failure = { title: 'Fee record not found', message: 'This invoice no longer exists.', code: 404 };
-        return res.status(404).json({ error: 'Fee record not found', code: 'FEE_NOT_FOUND', failure });
-    }
+    const fee = await loadFee(req.params.id);
+    if (!fee) return feeNotFound(res);
     res.json({ fee: serializeFee(fee) });
 });
 
 // ── POST /api/admin/fees ─────────────────────────────────────────────────────
-// body: memberId, planId, amount, dueDate, status?, notes?
+// Standalone invoice (not a membership period; use POST /members/:id/renew for that).
+// body: memberId, planId?, amount?, dueDate, status?, paidAmount?, paymentMethod?, notes?
+// Status is derived from paidAmount the same way createMember does it.
 const createFee = asyncHandler(async (req, res) => {
-    const { memberId, planId, amount, dueDate, status = 'PENDING', notes } = req.body;
+    const { memberId, planId, dueDate, status = 'PENDING', notes, paidAmount, paymentMethod } = req.body;
 
     const member = await prisma.user.findFirst({ where: { id: memberId, role: 'MEMBER' }, select: { id: true } });
     if (!member) {
-        const failure = { title: 'Member not found', message: 'The selected member does not exist.', code: 400 };
-        return res.status(400).json({ error: 'Member not found', code: 'INVALID_MEMBER', failure });
+        return failWith(res, 400, 'Member not found', 'INVALID_MEMBER', 'Member not found', 'The selected member does not exist.');
     }
 
     let plan = null;
     if (planId) {
         plan = await prisma.membershipPlan.findUnique({ where: { id: planId } });
         if (!plan) {
-            const failure = { title: 'Invalid membership plan', message: 'The selected plan does not exist.', code: 400 };
-            return res.status(400).json({ error: 'Plan not found', code: 'INVALID_PLAN', failure });
+            return failWith(res, 400, 'Plan not found', 'INVALID_PLAN', 'Invalid membership plan', 'The selected plan does not exist.');
         }
     }
+
+    const amount = req.body.amount !== undefined && req.body.amount !== '' ? Number(req.body.amount) : plan ? Number(plan.price) : NaN;
+    if (Number.isNaN(amount) || amount <= 0) {
+        return failWith(res, 400, 'Invalid amount', 'INVALID_AMOUNT', 'Invalid amount', 'amount must be greater than zero.');
+    }
+
+    const due = parseDate(dueDate);
+    if (!due) {
+        return failWith(res, 400, 'Invalid due date', 'INVALID_DUE_DATE', 'Invalid date', 'dueDate must be a valid date.');
+    }
+
+    const requested = String(status).toUpperCase();
+    if (!VALID_DB_STATUSES.includes(requested)) {
+        return failWith(res, 400, 'Invalid status', 'INVALID_STATUS', 'Invalid status', `status must be one of ${VALID_DB_STATUSES.join(', ')}.`);
+    }
+
+    const method = normalizePaymentMethod(paymentMethod);
+    if (method === undefined) {
+        return failWith(res, 400, 'Invalid payment method', 'INVALID_PAYMENT_METHOD', 'Invalid payment method', `paymentMethod must be one of ${PAYMENT_METHODS.join(', ')}.`);
+    }
+
+    let paid = 0;
+    if (paidAmount !== undefined && paidAmount !== '' && paidAmount !== null) paid = Number(paidAmount);
+    else if (requested === 'PAID') paid = amount;
+    if (Number.isNaN(paid) || paid < 0 || paid > amount) {
+        return failWith(res, 400, 'Invalid paid amount', 'INVALID_PAID_AMOUNT', 'Invalid amount', 'paidAmount must be between 0 and the invoice amount.');
+    }
+    if (requested === 'PARTIAL' && !(paid > 0 && paid < amount)) {
+        return failWith(res, 400, 'Invalid paid amount', 'INVALID_PAID_AMOUNT', 'Invalid amount', 'A partial invoice needs a paidAmount above 0 and below the amount.');
+    }
+
+    const now = new Date();
+    const isAdmin = req.user?.role === 'ADMIN';
+    const finalStatus = paid >= amount ? 'PAID' : paid > 0 ? 'PARTIAL' : requested === 'PAID' || requested === 'PARTIAL' ? 'PENDING' : requested;
 
     const fee = await prisma.feeRecord.create({
         data: {
@@ -247,9 +319,16 @@ const createFee = asyncHandler(async (req, res) => {
             planId: plan?.id || null,
             planNameSnapshot: plan?.name || null,
             amount,
-            status: status.toUpperCase(),
-            dueDate: new Date(dueDate),
+            paidAmount: paid > 0 ? paid : null,
+            status: finalStatus,
+            dueDate: due,
+            paidDate: paid > 0 ? now : null,
+            paymentMethod: paid > 0 ? method || 'CASH' : null,
             notes: notes || null,
+            approvedById: (paid > 0 || finalStatus === 'WAIVED') && isAdmin ? req.user.id : null,
+            approvedDate: paid > 0 || finalStatus === 'WAIVED' ? now : null,
+            // standalone invoice: no membership period, never applied to the member
+            appliedAt: now,
         },
         select: FEE_SELECT,
     });
@@ -258,26 +337,41 @@ const createFee = asyncHandler(async (req, res) => {
 });
 
 // ── PATCH /api/admin/fees/:id ────────────────────────────────────────────────
-// Generic edit: any subset of amount, dueDate, planId, notes
+// Any subset of amount, dueDate, planId, notes. If money was already received,
+// status is re-derived so a lowered amount can't leave PARTIAL > amount.
 const updateFee = asyncHandler(async (req, res) => {
     const { amount, dueDate, planId, notes } = req.body;
     const id = req.params.id;
 
     const existing = await prisma.feeRecord.findUnique({ where: { id } });
-    if (!existing) {
-        const failure = { title: 'Fee record not found', message: 'This invoice no longer exists.', code: 404 };
-        return res.status(404).json({ error: 'Fee record not found', code: 'FEE_NOT_FOUND', failure });
-    }
+    if (!existing) return feeNotFound(res);
 
     const data = {};
-    if (amount !== undefined) data.amount = amount;
-    if (dueDate !== undefined) data.dueDate = new Date(dueDate);
+
+    if (amount !== undefined) {
+        const n = Number(amount);
+        if (Number.isNaN(n) || n <= 0) {
+            return failWith(res, 400, 'Invalid amount', 'INVALID_AMOUNT', 'Invalid amount', 'amount must be greater than zero.');
+        }
+        const paid = Number(existing.paidAmount || 0);
+        if (paid > n) {
+            return failWith(res, 409, 'Amount below paid', 'AMOUNT_BELOW_PAID', 'Cannot lower amount', `₹${paid} has already been received on this invoice.`);
+        }
+        data.amount = n;
+        if (paid > 0 && ['PAID', 'PARTIAL'].includes(existing.status)) {
+            data.status = paid >= n ? 'PAID' : 'PARTIAL';
+        }
+    }
+    if (dueDate !== undefined) {
+        const d = parseDate(dueDate);
+        if (!d) return failWith(res, 400, 'Invalid due date', 'INVALID_DUE_DATE', 'Invalid date', 'dueDate must be a valid date.');
+        data.dueDate = d;
+    }
     if (notes !== undefined) data.notes = notes;
     if (planId !== undefined) {
         const plan = await prisma.membershipPlan.findUnique({ where: { id: planId } });
         if (!plan) {
-            const failure = { title: 'Invalid membership plan', message: 'The selected plan does not exist.', code: 400 };
-            return res.status(400).json({ error: 'Plan not found', code: 'INVALID_PLAN', failure });
+            return failWith(res, 400, 'Plan not found', 'INVALID_PLAN', 'Invalid membership plan', 'The selected plan does not exist.');
         }
         data.planId = plan.id;
         data.planNameSnapshot = plan.name;
@@ -288,25 +382,25 @@ const updateFee = asyncHandler(async (req, res) => {
 });
 
 // ── PATCH /api/admin/fees/:id/approve ────────────────────────────────────────
-// Approves a member-submitted payment claim (status PENDING -> PAID)
+// Approves a member-submitted payment claim (PENDING -> PAID).
 const approveFee = asyncHandler(async (req, res) => {
     const id = req.params.id;
     const existing = await prisma.feeRecord.findUnique({ where: { id } });
-    if (!existing) {
-        const failure = { title: 'Fee record not found', message: 'This invoice no longer exists.', code: 404 };
-        return res.status(404).json({ error: 'Fee record not found', code: 'FEE_NOT_FOUND', failure });
-    }
+    if (!existing) return feeNotFound(res);
     if (existing.status !== 'PENDING') {
-        const failure = { title: 'Cannot approve', message: 'Only pending-review invoices can be approved.', code: 409 };
-        return res.status(409).json({ error: 'Fee is not pending review', code: 'INVALID_STATE', failure });
+        return failWith(res, 409, 'Fee is not pending review', 'INVALID_STATE', 'Cannot approve', 'Only pending-review invoices can be approved.');
     }
 
+    const now = new Date();
     const fee = await prisma.feeRecord.update({
         where: { id },
         data: {
             status: 'PAID',
             paidAmount: existing.amount,
-            paidDate: new Date(),
+            paidDate: now,
+            paymentMethod: existing.paymentMethod || 'OTHER',
+            approvedById: req.user?.id ?? null,
+            approvedDate: now,
         },
         select: FEE_SELECT,
     });
@@ -321,13 +415,9 @@ const rejectFee = asyncHandler(async (req, res) => {
     const { reason } = req.body;
 
     const existing = await prisma.feeRecord.findUnique({ where: { id } });
-    if (!existing) {
-        const failure = { title: 'Fee record not found', message: 'This invoice no longer exists.', code: 404 };
-        return res.status(404).json({ error: 'Fee record not found', code: 'FEE_NOT_FOUND', failure });
-    }
+    if (!existing) return feeNotFound(res);
     if (existing.status !== 'PENDING') {
-        const failure = { title: 'Cannot reject', message: 'Only pending-review invoices can be rejected.', code: 409 };
-        return res.status(409).json({ error: 'Fee is not pending review', code: 'INVALID_STATE', failure });
+        return failWith(res, 409, 'Fee is not pending review', 'INVALID_STATE', 'Cannot reject', 'Only pending-review invoices can be rejected.');
     }
 
     const isPastDue = new Date(existing.dueDate).getTime() < dateUtil.startOfToday().getTime();
@@ -335,7 +425,7 @@ const rejectFee = asyncHandler(async (req, res) => {
         where: { id },
         data: {
             status: isPastDue ? 'OVERDUE' : 'PENDING',
-            receiptUrl: null,
+            receiptImageUrl: null, // was `receiptUrl` (non-existent column)
             notes: reason ? `Payment rejected: ${reason}` : existing.notes,
         },
         select: FEE_SELECT,
@@ -345,33 +435,48 @@ const rejectFee = asyncHandler(async (req, res) => {
 });
 
 // ── PATCH /api/admin/fees/:id/mark-paid ──────────────────────────────────────
-// body: amountReceived, method (cash|upi|bankTransfer|other), notes?
+// body: amountReceived, method (cash|upi|bankTransfer|other or DB value), notes?
+// amountReceived is ADDED to what was already paid (it used to overwrite it),
+// so a second instalment on a PARTIAL invoice completes it correctly.
 const markFeePaid = asyncHandler(async (req, res) => {
     const id = req.params.id;
     const { amountReceived, method, notes } = req.body;
 
     const existing = await prisma.feeRecord.findUnique({ where: { id } });
-    if (!existing) {
-        const failure = { title: 'Fee record not found', message: 'This invoice no longer exists.', code: 404 };
-        return res.status(404).json({ error: 'Fee record not found', code: 'FEE_NOT_FOUND', failure });
+    if (!existing) return feeNotFound(res);
+    if (existing.status === 'PAID' || existing.status === 'WAIVED') {
+        return failWith(res, 409, 'Fee already settled', 'INVALID_STATE', 'Already settled', `This invoice is already ${existing.status.toLowerCase()}.`);
     }
 
     const received = Number(amountReceived);
     if (!received || received <= 0) {
-        const failure = { title: 'Invalid amount', message: 'Amount received must be greater than zero.', code: 400 };
-        return res.status(400).json({ error: 'Invalid amountReceived', code: 'INVALID_AMOUNT', failure });
+        return failWith(res, 400, 'Invalid amountReceived', 'INVALID_AMOUNT', 'Invalid amount', 'Amount received must be greater than zero.');
     }
 
-    const status = received >= Number(existing.amount) ? 'PAID' : 'PARTIAL';
+    const dbMethod = normalizePaymentMethod(method);
+    if (dbMethod === undefined) {
+        return failWith(res, 400, 'Invalid payment method', 'INVALID_PAYMENT_METHOD', 'Invalid payment method', `method must be one of ${PAYMENT_METHODS.join(', ')}.`);
+    }
 
+    const amount = Number(existing.amount);
+    const previouslyPaid = Number(existing.paidAmount || 0);
+    const balance = round2(amount - previouslyPaid);
+    if (received > balance) {
+        return failWith(res, 400, 'Amount exceeds balance', 'AMOUNT_EXCEEDS_BALANCE', 'Too much received', `Only ₹${balance} is outstanding on this invoice.`);
+    }
+
+    const newPaid = round2(previouslyPaid + received);
+    const now = new Date();
     const fee = await prisma.feeRecord.update({
         where: { id },
         data: {
-            status,
-            paidAmount: received,
-            paidDate: new Date(),
-            paymentMethod: toDbPaymentMethod(method),
+            status: newPaid >= amount ? 'PAID' : 'PARTIAL',
+            paidAmount: newPaid,
+            paidDate: now,
+            paymentMethod: dbMethod || 'CASH',
             notes: notes || existing.notes,
+            approvedById: req.user?.id ?? existing.approvedById,
+            approvedDate: now,
         },
         select: FEE_SELECT,
     });
@@ -380,22 +485,25 @@ const markFeePaid = asyncHandler(async (req, res) => {
 });
 
 // ── PATCH /api/admin/fees/:id/waive ──────────────────────────────────────────
-// body: reason?
+// body: reason?   Waives whatever is still owed; money already received is kept.
 const waiveFee = asyncHandler(async (req, res) => {
     const id = req.params.id;
     const { reason } = req.body;
 
     const existing = await prisma.feeRecord.findUnique({ where: { id } });
-    if (!existing) {
-        const failure = { title: 'Fee record not found', message: 'This invoice no longer exists.', code: 404 };
-        return res.status(404).json({ error: 'Fee record not found', code: 'FEE_NOT_FOUND', failure });
+    if (!existing) return feeNotFound(res);
+    if (existing.status === 'PAID' || existing.status === 'WAIVED') {
+        return failWith(res, 409, 'Fee already settled', 'INVALID_STATE', 'Cannot waive', `This invoice is already ${existing.status.toLowerCase()}.`);
     }
 
+    const now = new Date();
     const fee = await prisma.feeRecord.update({
         where: { id },
         data: {
             status: 'WAIVED',
             notes: reason || existing.notes,
+            approvedById: req.user?.id ?? null,
+            approvedDate: now,
         },
         select: FEE_SELECT,
     });
@@ -409,128 +517,94 @@ const sendFeeReminder = asyncHandler(async (req, res) => {
     const id = req.params.id;
     const { channels = ['push'] } = req.body;
 
-    const fee = await prisma.feeRecord.findUnique({ where: { id }, select: FEE_SELECT });
-    if (!fee) {
-        const failure = { title: 'Fee record not found', message: 'This invoice no longer exists.', code: 404 };
-        return res.status(404).json({ error: 'Fee record not found', code: 'FEE_NOT_FOUND', failure });
+    const fee = await loadFee(id);
+    if (!fee) return feeNotFound(res);
+
+    if (!Array.isArray(channels) || !channels.length || channels.some((c) => !REMINDER_CHANNELS.includes(c))) {
+        return failWith(res, 400, 'Invalid channels', 'INVALID_CHANNELS', 'Invalid channels', `channels must be a non-empty subset of ${REMINDER_CHANNELS.join(', ')}.`);
     }
 
-    const serialized = serializeFee(fee);
-    const message = `Hi ${serialized.memberName.split(' ')[0]}, your ${serialized.plan} fee of ₹${serialized.amount} is ${
-        serialized.overdueDays > 0 ? `${serialized.overdueDays} days overdue` : 'due soon'
-    }. Please pay at the earliest.`;
+    const s = serializeFee(fee);
+    if (s.status === 'paid' || s.status === 'waived') {
+        return failWith(res, 409, 'Nothing to remind', 'INVALID_STATE', 'Nothing to remind', 'This invoice is already settled.');
+    }
 
-    const results = await sendReminderNotification({
-        memberId: fee.memberId,
-        channels,
-        message,
-    });
+    const message = `Hi ${s.memberName.split(' ')[0]}, your ${s.plan} fee of ₹${s.balance.toFixed(0)} is ${
+        s.overdueDays > 0 ? `${s.overdueDays} days overdue` : 'due soon'
+    }. Please pay at the earliest. — Club Fitness`;
+
+    const results = await sendReminderNotification({ memberId: fee.memberId, channels, message });
 
     res.json({ sent: true, channels, results });
 });
 
 // ── POST /api/admin/fees/:id/receipt ─────────────────────────────────────────
-// body: receiptUrl — set after the file has been uploaded via your storage layer
+// Multipart upload (field "receipt", same storage as renewMembership's
+// 'receipts' folder) or JSON { receiptUrl }. Route needs the multer middleware.
 const attachReceipt = asyncHandler(async (req, res) => {
     const id = req.params.id;
-    const { receiptUrl } = req.body;
+    const receiptUrl = req.file ? getFileUrl('receipts', req.file.filename) : req.body?.receiptUrl;
 
     if (!receiptUrl) {
-        const failure = { title: 'Missing receipt', message: 'A receiptUrl is required.', code: 400 };
-        return res.status(400).json({ error: 'receiptUrl is required', code: 'MISSING_RECEIPT_URL', failure });
+        return failWith(res, 400, 'receipt is required', 'MISSING_RECEIPT_URL', 'Missing receipt', 'Upload a receipt image or provide a receiptUrl.');
     }
 
     const existing = await prisma.feeRecord.findUnique({ where: { id } });
-    if (!existing) {
-        const failure = { title: 'Fee record not found', message: 'This invoice no longer exists.', code: 404 };
-        return res.status(404).json({ error: 'Fee record not found', code: 'FEE_NOT_FOUND', failure });
-    }
+    if (!existing) return feeNotFound(res);
 
-    const fee = await prisma.feeRecord.update({ where: { id }, data: { receiptUrl }, select: FEE_SELECT });
+    const fee = await prisma.feeRecord.update({
+        where: { id },
+        data: { receiptImageUrl: receiptUrl },
+        select: FEE_SELECT,
+    });
     res.json({ fee: serializeFee(fee) });
 });
 
 // ── DELETE /api/admin/fees/:id ───────────────────────────────────────────────
+// Renewal records are protected: removing the latest renewal must go through
+// DELETE /members/:id/renew/last so the member's plan/dates are rolled back.
+// Any offer redemption tied to the invoice is released first (UserOffer holds
+// a FK to the fee record and Offer.redemptionCount must be decremented).
 const deleteFee = asyncHandler(async (req, res) => {
     const id = req.params.id;
     const existing = await prisma.feeRecord.findUnique({ where: { id } });
-    if (!existing) {
-        const failure = { title: 'Fee record not found', message: 'This invoice no longer exists.', code: 404 };
-        return res.status(404).json({ error: 'Fee record not found', code: 'FEE_NOT_FOUND', failure });
+    if (!existing) return feeNotFound(res);
+
+    if (existing.periodStart) {
+        const [latest, others] = await Promise.all([
+            prisma.feeRecord.findFirst({
+                where: { memberId: existing.memberId, periodStart: { not: null } },
+                orderBy: { createdAt: 'desc' },
+                select: { id: true },
+            }),
+            prisma.feeRecord.count({ where: { memberId: existing.memberId, id: { not: id } } }),
+        ]);
+        if (latest?.id === id && others > 0) {
+            return failWith(
+                res, 409, 'Use renewal revert', 'USE_REVERT_RENEWAL', 'Cannot delete renewal',
+                "This is the member's latest renewal. Use \"Revert last renewal\" so their membership is restored."
+            );
+        }
     }
-    await prisma.feeRecord.delete({ where: { id } });
+
+    await prisma.$transaction(async (tx) => {
+        await offerService.releaseRedemptions(tx, [id]);
+        await tx.feeRecord.delete({ where: { id } });
+    });
+
     res.json({ message: 'Fee record deleted successfully!' });
 });
 
-// ── shared: fetch + filter + sort fees for the export (no pagination) ──────
-async function buildFeeExportData({ search = '', status = 'All', memberId, planId, sortBy = 'dueDate' }) {
-    const where = {};
-
-    if (status && status !== 'All') {
-        where.status = status.toUpperCase();
-    }
-    if (memberId) where.memberId = memberId;
-    if (planId) where.planId = planId;
-    if (search.trim()) {
-        where.OR = [
-            { id: { contains: search } },
-            { member: { name: { contains: search, mode: 'insensitive' } } },
-            { member: { phone: { contains: search } } },
-            { member: { id: { contains: search } } },
-        ];
-    }
-
-    const rows = await prisma.feeRecord.findMany({ where, select: FEE_SELECT });
-    let fees = rows.map(serializeFee);
-
-    switch (sortBy) {
-        case 'amount':
-            fees.sort((a, b) => b.amount - a.amount);
-            break;
-        case 'name':
-            fees.sort((a, b) => a.memberName.localeCompare(b.memberName));
-            break;
-        case 'overdueDays':
-            fees.sort((a, b) => b.overdueDays - a.overdueDays);
-            break;
-        default:
-            fees.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
-    }
-
-    const totalCollected = fees
-        .filter((f) => f.status === 'paid')
-        .reduce((sum, f) => sum + (f.paidAmount || f.amount), 0);
-    const totalOutstanding = fees
-        .filter((f) => ['overdue', 'pending', 'partial'].includes(f.status))
-        .reduce((sum, f) => sum + (f.amount - (f.paidAmount || 0)), 0);
-    const totalPartialPaid = fees
-        .filter((f) => f.status === 'partial')
-        .reduce((sum, f) => sum + (f.paidAmount || 0), 0);
-    const overdueCount = fees.filter((f) => f.status === 'overdue').length;
-    const total = totalCollected + totalOutstanding;
-
-    return {
-        fees,
-        summary: {
-            totalCollected,
-            totalOutstanding,
-            totalPartialPaid,
-            overdueCount,
-            collectedProgress: total > 0 ? totalCollected / total : 0,
-        },
-    };
-}
-
 // ── GET /api/admin/fees/export/pdf ───────────────────────────────────────────
-// Query params mirror listFees's filters (search, status, memberId, planId,
-// sortBy) but the export is never paginated — it always includes every
-// matching record. Produces a branded, multi-page report: summary cards
-// followed by the full fee record table.
+// IMPORTANT: register this route BEFORE GET /fees/:id or "export" is parsed as an id.
+// Same filters as listFees (search, status, memberId, planId, sortBy); never paginated.
 const exportFeesPdf = asyncHandler(async (req, res) => {
     const { search, status, memberId, planId, sortBy } = req.query;
-    const { fees, summary } = await buildFeeExportData({ search, status, memberId, planId, sortBy });
+    const { matching, fees } = await loadFees({ search, status, memberId, planId, sortBy });
+    const summary = { ...totalsOf(fees), overdueCount: fees.filter((f) => f.status === 'overdue').length };
+    const counts = countsOf(matching);
 
-    const statusLabel = !status || status === 'All' ? 'All Statuses' : status;
+    const statusLabel = !status || String(status).toLowerCase() === 'all' ? 'All Statuses' : status;
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'attachment; filename="fee-report.pdf"');
@@ -569,7 +643,7 @@ const exportFeesPdf = asyncHandler(async (req, res) => {
         {
             label: 'Total Records',
             value: String(fees.length),
-            change: `${fees.filter((f) => f.status === 'waived').length} waived`,
+            change: `${counts.waived} waived overall`,
             positive: true,
             accent: '#7B1FA2',
         },
@@ -579,10 +653,11 @@ const exportFeesPdf = asyncHandler(async (req, res) => {
     drawTable(doc, {
         runningHeaderTitle: 'Fee Report — Records (cont.)',
         columns: [
-            { key: 'id', label: 'INVOICE', flex: 1.3, align: 'left' },
-            { key: 'member', label: 'MEMBER', flex: 1.9, align: 'left' },
-            { key: 'plan', label: 'PLAN', flex: 1.6, align: 'left' },
-            { key: 'amount', label: 'AMOUNT', flex: 1.3, align: 'right' },
+            { key: 'id', label: 'INVOICE', flex: 1.2, align: 'left' },
+            { key: 'member', label: 'MEMBER', flex: 1.6, align: 'left' },
+            { key: 'plan', label: 'PLAN', flex: 1.4, align: 'left' },
+            { key: 'amount', label: 'AMOUNT', flex: 1.1, align: 'right' },
+            { key: 'balance', label: 'BALANCE', flex: 1.1, align: 'right' },
             { key: 'dueDate', label: 'DUE DATE', flex: 1.1, align: 'left' },
             { key: 'status', label: 'STATUS', flex: 1, align: 'center' },
         ],
@@ -590,7 +665,8 @@ const exportFeesPdf = asyncHandler(async (req, res) => {
             id: f.id,
             member: f.memberName,
             plan: f.plan,
-            amount: formatCurrency(f.paidAmount ?? f.amount),
+            amount: formatCurrency(f.amount), // was paidAmount ?? amount, which mixed two meanings in one column
+            balance: formatCurrency(f.balance),
             dueDate: f.dueDate ? new Date(f.dueDate).toISOString().slice(0, 10) : '-',
             status: f.status.toUpperCase(),
         })),
