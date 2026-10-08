@@ -7,6 +7,7 @@ import {
     validateReminderInput,
 } from '../../validators/fee.validator.js';
 import { authenticate, authorize } from '../../middlewares/auth.middleware.js';
+import { uploadReceipt, cleanupOnError } from '../../config/multer.js';
 
 const router = express.Router();
 
@@ -26,6 +27,6 @@ router.patch('/:id/reject', feeController.rejectFee);
 router.patch('/:id/mark-paid', validateMarkPaidInput, feeController.markFeePaid);
 router.patch('/:id/waive', feeController.waiveFee);
 router.post('/:id/remind', validateReminderInput, feeController.sendFeeReminder);
-router.post('/:id/receipt', feeController.attachReceipt);
+router.post('/:id/receipt', uploadReceipt, cleanupOnError, feeController.attachReceipt);
 
 export default router;

@@ -14,6 +14,7 @@ import prisma from '../../config/db.js';
 // ============================================================================
 
 const RANGE_DAYS = {
+  '1D': 1,
   '7D': 7,
   '30D': 30,
   '6M': 182,
@@ -21,6 +22,7 @@ const RANGE_DAYS = {
 };
 
 const RANGE_LABELS = {
+  '1D': 'Last 24 hours',
   '7D': 'Last 7 days',
   '30D': 'Last 30 days',
   '6M': 'Last 6 months',
@@ -30,7 +32,60 @@ const RANGE_LABELS = {
 const PLAN_COLORS = ['#C41E2D', '#7B1FA2', '#1565C0', '#2E7D32', '#FFA000', '#29B6F6'];
 
 // ── resolve the selected range + the equal-length prior window (for deltas) ──
-function resolveRange(rangeParam) {
+const DAY_MS = 86400000;
+
+function invalidRange(message) {
+  const err = new Error(message);
+  err.code = 'INVALID_RANGE';
+  return err;
+}
+
+// Takes only the YYYY-MM-DD part (any time/zone suffix is ignored) and builds a
+// local-time date at 00:00. Rejects rolled-over dates like 2026-02-31.
+function parseDateOnly(value) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(value || '').trim());
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]) - 1;
+  const d = Number(m[3]);
+  const date = new Date(y, mo, d);
+  if (date.getFullYear() !== y || date.getMonth() !== mo || date.getDate() !== d) return null;
+  return date;
+}
+
+const formatDay = (d) =>
+  d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+
+// Custom range (startDate + endDate) takes priority over `range`.
+function resolveRange(rangeParam, startDate, endDate) {
+  if (startDate || endDate) {
+    if (!startDate || !endDate) {
+      throw invalidRange('Both startDate and endDate are required for a custom range.');
+    }
+    const start = parseDateOnly(startDate); // 00:00:00.000
+    const endDay = parseDateOnly(endDate);
+    if (!start || !endDay) {
+      throw invalidRange('startDate and endDate must be valid dates (YYYY-MM-DD).');
+    }
+    if (endDay < start) throw invalidRange('endDate cannot be before startDate.');
+
+    const days = Math.round((endDay - start) / DAY_MS) + 1;
+
+    const end = new Date(endDay);
+    end.setHours(23, 59, 59, 999);
+
+    // previous window: same number of days, ending right before `start`
+    const prevEnd = new Date(start.getTime() - 1);
+    const prevStart = new Date(start);
+    prevStart.setDate(prevStart.getDate() - days);
+
+    return {
+      key: 'CUSTOM',
+      label: `${formatDay(start)} – ${formatDay(end)}`,
+      start, end, prevStart, prevEnd,
+    };
+  }
+
   const key = RANGE_DAYS[(rangeParam || '30D').toUpperCase()] ? rangeParam.toUpperCase() : '30D';
   const days = RANGE_DAYS[key];
 
@@ -77,8 +132,27 @@ async function getRevenueForWindow(start, end) {
   };
 }
 
-async function buildSalesReportData({ range, trendMonths = 6, txLimit = 20 }) {
-  const { start, end, prevStart, prevEnd, key } = resolveRange(range);
+// Earliest data point behind each revenue metric (null if there is none).
+async function getFirstRecordDates() {
+  const [fee, order] = await Promise.all([
+    prisma.feeRecord.aggregate({
+      where: { status: 'PAID', paidDate: { not: null } },
+      _min: { paidDate: true },
+    }),
+    prisma.productOrder.aggregate({
+      where: { status: { not: 'CANCELLED' } },
+      _min: { placedAt: true },
+    }),
+  ]);
+  return { firstFeeAt: fee._min.paidDate, firstOrderAt: order._min.placedAt };
+}
+
+async function buildSalesReportData({ range, startDate, endDate, trendMonths = 6, txLimit = 20 }) {
+  const { start, end, prevStart, prevEnd, key, label } = resolveRange(range, startDate, endDate);
+  const { firstFeeAt, firstOrderAt } = await getFirstRecordDates();
+  const firstAnyAt = [firstFeeAt, firstOrderAt].filter(Boolean).sort((a, b) => a - b)[0] || null;
+  // a comparison is only meaningful if the whole previous window has data behind it
+  const hasPrev = (first) => first != null && prevStart >= first;
   trendMonths = Math.min(Math.max(trendMonths, 1), 12);
   txLimit = Math.min(Math.max(txLimit, 1), 1000);
 
@@ -107,25 +181,26 @@ async function buildSalesReportData({ range, trendMonths = 6, txLimit = 20 }) {
   );
   const outstandingMemberCount = new Set(outstandingRecords.map((r) => r.memberId)).size;
 
-  // ── Plan split / plan performance table (paid fees within the window) ───
-  const paidFeesInWindow = await prisma.feeRecord.findMany({
-    where: { status: 'PAID', paidDate: { gte: start, lte: end } },
-    select: {
-      memberId: true,
-      paidAmount: true,
-      plan: { select: { id: true, name: true } },
-    },
-  });
+  // ── Plan split / plan performance (grouped in the DB) ───────────────────
+  const [grouped, plans] = await Promise.all([
+    prisma.feeRecord.groupBy({
+      by: ['planId', 'memberId'],
+      where: { status: 'PAID', paidDate: { gte: start, lte: end } },
+      _sum: { paidAmount: true },
+    }),
+    prisma.membershipPlan.findMany({ select: { id: true, name: true } }),
+  ]);
+  const planNames = new Map(plans.map((p) => [p.id, p.name]));
 
   const planMap = new Map();
-  for (const fee of paidFeesInWindow) {
-    const planId = fee.plan.id;
-    if (!planMap.has(planId)) {
-      planMap.set(planId, { plan: fee.plan.name, members: new Set(), revenue: 0 });
+  for (const g of grouped) {
+    const key = g.planId ?? 'none';
+    if (!planMap.has(key)) {
+      planMap.set(key, { plan: planNames.get(g.planId) || 'No Plan', members: new Set(), revenue: 0 });
     }
-    const entry = planMap.get(planId);
-    entry.members.add(fee.memberId);
-    entry.revenue += toNumber(fee.paidAmount);
+    const entry = planMap.get(key);
+    entry.members.add(g.memberId);
+    entry.revenue += toNumber(g._sum.paidAmount);
   }
 
   const membershipRevenueForShare = current.membershipRevenue || 1;
@@ -223,22 +298,22 @@ async function buildSalesReportData({ range, trendMonths = 6, txLimit = 20 }) {
 
   return {
     range: key,
-    rangeLabel: RANGE_LABELS[key],
+    rangeLabel: label || RANGE_LABELS[key],
     window: { start, end },
     kpis: {
       totalRevenue: {
         value: Number(currentTotal.toFixed(2)),
-        changePercent: pct(currentTotal, previousTotal),
+        changePercent: hasPrev(firstAnyAt) ? pct(currentTotal, previousTotal) : null,
         positive: currentTotal >= previousTotal,
       },
       membershipsSold: {
         value: membershipsSoldCurrent,
-        delta: membershipsSoldCurrent - membershipsSoldPrevious,
+        delta: hasPrev(firstFeeAt) ? membershipsSoldCurrent - membershipsSoldPrevious : null,
         positive: membershipsSoldCurrent >= membershipsSoldPrevious,
       },
       shopSales: {
         value: Number(current.shopRevenue.toFixed(2)),
-        changePercent: pct(current.shopRevenue, previous.shopRevenue),
+        changePercent: hasPrev(firstOrderAt) ? pct(current.shopRevenue, previous.shopRevenue) : null,
         positive: current.shopRevenue >= previous.shopRevenue,
       },
       outstandingDues: {
@@ -257,19 +332,28 @@ async function buildSalesReportData({ range, trendMonths = 6, txLimit = 20 }) {
   };
 }
 
+const reportParams = (req, defaultTxLimit) => ({
+  range: req.query.range,
+  startDate: req.query.startDate,
+  endDate: req.query.endDate,
+  trendMonths: parseInt(req.query.trendMonths, 10) || 6,
+  txLimit: parseInt(req.query.txLimit, 10) || defaultTxLimit,
+});
+
+const handleReportError = (err, res, next) =>
+  err.code === 'INVALID_RANGE'
+    ? res.status(400).json({ error: err.message, code: err.code })
+    : next(err);
+
 // ============================================================================
 // GET /api/reports/sales
 // ============================================================================
 const getSalesReport = async function (req, res, next) {
   try {
-    const data = await buildSalesReportData({
-      range: req.query.range,
-      trendMonths: parseInt(req.query.trendMonths, 10) || 6,
-      txLimit: parseInt(req.query.txLimit, 10) || 20,
-    });
+    const data = await buildSalesReportData(reportParams(req, 20));
     return res.status(200).json(data);
   } catch (err) {
-    next(err);
+    handleReportError(err, res, next);
   }
 };
 
@@ -452,7 +536,7 @@ function drawKpiCards(doc, cards) {
     doc
       .font('Helvetica-Bold')
       .fontSize(9)
-      .fillColor(card.positive ? '#2E7D32' : '#C41E2D')
+      .fillColor(card.neutral ? '#888888' : card.positive ? '#2E7D32' : '#C41E2D')
       .text(card.change, x + 16, y + 44, { width: cardWidth - 30, lineBreak: false });
   });
 
@@ -477,13 +561,12 @@ function addPageNumbers(doc) {
   }
 }
 
+const pdfDelta = (v, suffix = '') =>
+  v == null ? 'No previous period data' : `${v >= 0 ? '▲' : '▼'} ${Math.abs(v)}${suffix} vs previous period`;
+
 const exportSalesPdf = async function (req, res, next) {
   try {
-    const data = await buildSalesReportData({
-      range: req.query.range,
-      trendMonths: parseInt(req.query.trendMonths, 10) || 6,
-      txLimit: parseInt(req.query.txLimit, 10) || 500,
-    });
+    const data = await buildSalesReportData(reportParams(req, 500));
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'attachment; filename="sales-report.pdf"');
@@ -511,21 +594,24 @@ const exportSalesPdf = async function (req, res, next) {
       {
         label: 'Total Revenue',
         value: formatCurrency(data.kpis.totalRevenue.value),
-        change: `${data.kpis.totalRevenue.changePercent >= 0 ? '▲' : '▼'} ${Math.abs(data.kpis.totalRevenue.changePercent)}% vs previous period`,
+        change: pdfDelta(data.kpis.totalRevenue.changePercent, '%'),
+        neutral: data.kpis.totalRevenue.changePercent == null,
         positive: data.kpis.totalRevenue.positive,
         accent: BRAND_COLOR,
       },
       {
         label: 'Memberships Sold',
         value: String(data.kpis.membershipsSold.value),
-        change: `${data.kpis.membershipsSold.delta >= 0 ? '▲' : '▼'} ${Math.abs(data.kpis.membershipsSold.delta)} vs previous period`,
+        change: pdfDelta(data.kpis.membershipsSold.delta),
+        neutral: data.kpis.membershipsSold.delta == null,
         positive: data.kpis.membershipsSold.positive,
         accent: '#7B1FA2',
       },
       {
         label: 'Shop Sales',
         value: formatCurrency(data.kpis.shopSales.value),
-        change: `${data.kpis.shopSales.changePercent >= 0 ? '▲' : '▼'} ${Math.abs(data.kpis.shopSales.changePercent)}% vs previous period`,
+        change: pdfDelta(data.kpis.shopSales.changePercent, '%'),
+        neutral: data.kpis.shopSales.changePercent == null,
         positive: data.kpis.shopSales.positive,
         accent: '#29B6F6',
       },
@@ -581,7 +667,7 @@ const exportSalesPdf = async function (req, res, next) {
     addPageNumbers(doc);
     doc.end();
   } catch (err) {
-    next(err);
+    handleReportError(err, res, next);
   }
 };
 
@@ -626,13 +712,11 @@ function shadeAlternateRow(row, index) {
   }
 }
 
+const excelDelta = (v, suffix = '') => (v == null ? 'N/A' : `${v >= 0 ? '+' : ''}${v}${suffix}`);
+
 const exportSalesExcel = async function (req, res, next) {
   try {
-    const data = await buildSalesReportData({
-      range: req.query.range,
-      trendMonths: parseInt(req.query.trendMonths, 10) || 6,
-      txLimit: parseInt(req.query.txLimit, 10) || 500,
-    });
+    const data = await buildSalesReportData(reportParams(req, 500));
 
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'Club Fitness Reports';
@@ -663,9 +747,9 @@ const exportSalesExcel = async function (req, res, next) {
     styleHeaderRow(headerRow);
 
     const summaryRows = [
-      ['Total Revenue', data.kpis.totalRevenue.value, `${data.kpis.totalRevenue.changePercent >= 0 ? '+' : ''}${data.kpis.totalRevenue.changePercent}%`],
-      ['Memberships Sold', data.kpis.membershipsSold.value, `${data.kpis.membershipsSold.delta >= 0 ? '+' : ''}${data.kpis.membershipsSold.delta}`],
-      ['Shop Sales', data.kpis.shopSales.value, `${data.kpis.shopSales.changePercent >= 0 ? '+' : ''}${data.kpis.shopSales.changePercent}%`],
+      ['Total Revenue', data.kpis.totalRevenue.value, excelDelta(data.kpis.totalRevenue.changePercent, '%')],
+      ['Memberships Sold', data.kpis.membershipsSold.value, excelDelta(data.kpis.membershipsSold.delta)],
+      ['Shop Sales', data.kpis.shopSales.value, excelDelta(data.kpis.shopSales.changePercent, '%')],
       ['Outstanding Dues', data.kpis.outstandingDues.value, `${data.kpis.outstandingDues.memberCount} members owing`],
     ];
 
@@ -781,7 +865,7 @@ const exportSalesExcel = async function (req, res, next) {
     await workbook.xlsx.write(res);
     res.end();
   } catch (err) {
-    next(err);
+    handleReportError(err, res, next);
   }
 };
 

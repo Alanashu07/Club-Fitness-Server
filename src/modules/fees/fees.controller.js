@@ -218,25 +218,105 @@ async function loadFees({ search, status = 'All', memberId, planId, sortBy }) {
 
 const loadFee = (id) => prisma.feeRecord.findUnique({ where: { id }, select: FEE_SELECT });
 
+// ── status buckets as DB filters ─────────────────────────────────────────────
+// Mirrors effectiveStatus(): PENDING + past due => overdue.
+const BUCKET_ORDER = ['overdue', 'pending', 'partial', 'paid', 'waived'];
+
+const bucketWheres = (today) => ({
+    overdue: { OR: [{ status: 'OVERDUE' }, { status: 'PENDING', dueDate: { lt: today } }] },
+    pending: { status: 'PENDING', dueDate: { gte: today } },
+    partial: { status: 'PARTIAL' },
+    paid: { status: 'PAID' },
+    waived: { status: 'WAIVED' },
+});
+
+const DUE_ASC = [{ dueDate: 'asc' }, { id: 'asc' }]; // id = stable tiebreaker for paging
+
+// Paginates in the database. The "sorted list" is a sequence of segments
+// (each a where + orderBy + count); we skip whole segments before the page
+// and only query the ones the page window overlaps.
+async function loadFeesPage({ search, status = 'All', memberId, planId, sortBy, page, limit }) {
+    const base = buildWhere({ search, memberId, planId });
+    const today = dateUtil.startOfToday();
+    const buckets = bucketWheres(today);
+    const sort = normalizeSort(sortBy);
+    const wanted = String(status || 'All').toLowerCase();
+    const filtered = wanted !== 'all';
+
+    // counts for ALL statuses (tab badges) under search/member/plan filters
+    const bucketCounts = await Promise.all(
+        BUCKET_ORDER.map((k) => prisma.feeRecord.count({ where: { AND: [base, buckets[k]] } }))
+    );
+    const c = Object.fromEntries(BUCKET_ORDER.map((k, i) => [k, bucketCounts[i]]));
+    const all = bucketCounts.reduce((a, b) => a + b, 0);
+    const counts = { total: all, all, ...c };
+
+    // build segments
+    let segments;
+    if (filtered && !buckets[wanted]) {
+        segments = []; // unknown status => empty, same as before
+    } else if (sort === 'amount' || sort === 'name') {
+        const orderBy =
+            sort === 'amount'
+                ? [{ amount: 'desc' }, { id: 'asc' }]
+                : [{ member: { name: 'asc' } }, { id: 'asc' }];
+        segments = [{ where: filtered ? buckets[wanted] : {}, orderBy, count: filtered ? c[wanted] : all }];
+    } else if (sort === 'overdueDays') {
+        // most overdue first (= oldest due date), everything else after (0 days)
+        segments = filtered
+            ? [{ where: buckets[wanted], orderBy: DUE_ASC, count: c[wanted] }]
+            : [
+                  { where: buckets.overdue, orderBy: DUE_ASC, count: c.overdue },
+                  { where: { NOT: buckets.overdue }, orderBy: DUE_ASC, count: all - c.overdue },
+              ];
+    } else {
+        // default: overdue → pending → partial → paid → waived, each by due date
+        const keys = filtered ? [wanted] : BUCKET_ORDER;
+        segments = keys.map((k) => ({ where: buckets[k], orderBy: DUE_ASC, count: c[k] }));
+    }
+
+    const total = segments.reduce((sum, s) => sum + s.count, 0);
+
+    // fetch only the window [start, start + limit)
+    let toSkip = (page - 1) * limit;
+    let need = limit;
+    const rows = [];
+    for (const seg of segments) {
+        if (need <= 0) break;
+        if (toSkip >= seg.count) {
+            toSkip -= seg.count;
+            continue;
+        }
+        const chunk = await prisma.feeRecord.findMany({
+            where: { AND: [base, seg.where] },
+            orderBy: seg.orderBy,
+            skip: toSkip,
+            take: Math.min(need, seg.count - toSkip),
+            select: FEE_SELECT,
+        });
+        rows.push(...chunk);
+        need -= chunk.length;
+        toSkip = 0;
+    }
+
+    return { fees: rows.map(serializeFee), total, counts };
+}
+
 // ── GET /api/admin/fees ──────────────────────────────────────────────────────
-// Query: search, status (All|Pending|Overdue|Paid|Partial|Waived), memberId,
-//        planId, sortBy (dueDate|amount|name|overdueDays), page, limit
-// `counts` are for ALL statuses under the search/member/plan filters, so tab
-// badges stay correct while a status tab is selected.
 const listFees = asyncHandler(async (req, res) => {
     const { search = '', status = 'All', memberId, planId, sortBy = 'dueDate', page = '1', limit = '20' } = req.query;
 
-    const { matching, fees } = await loadFees({ search, status, memberId, planId, sortBy });
-
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
-    const limitNum = Math.max(1, parseInt(limit, 10) || 20);
-    const total = fees.length;
-    const start = (pageNum - 1) * limitNum;
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+
+    const { fees, total, counts } = await loadFeesPage({
+        search, status, memberId, planId, sortBy, page: pageNum, limit: limitNum,
+    });
 
     res.json({
-        fees: fees.slice(start, start + limitNum),
+        fees,
         pagination: { page: pageNum, limit: limitNum, total, totalPages: Math.ceil(total / limitNum) },
-        counts: countsOf(matching),
+        counts,
     });
 });
 
@@ -252,11 +332,79 @@ const getFeeSummary = asyncHandler(async (req, res) => {
     res.json({ ...totalsOf(fees), counts: countsOf(fees) });
 });
 
-// ── GET /api/admin/fees/:id ─────────────────────────────────────────────────
+// ── GET /api/v1/fees/:id ─────────────────────────────────────────────────
+// Returns the invoice plus everything the detail screen needs:
+//   fee          -> same shape as before (nothing else breaks)
+//   membership   -> plan + billing period this invoice belongs to
+//   relatedFees  -> every other invoice in the same renewalGroupId
+//                   (the "pair": e.g. one PAID + one WAIVED/PENDING)
+//   reminders    -> reminders sent for this invoice
+//   approvedBy   -> staff who approved / marked paid / waived
+//   offer        -> offer redemption tied to this invoice (if any)
+//   memberHistory-> member's 5 most recent other invoices
+const FEE_DETAIL_SELECT = {
+    ...FEE_SELECT,
+    submittedDate: true,
+    plan: true, // full plan row instead of { id, name }
+    approvedBy: { select: { id: true, name: true, role: true } },
+    remindersSent: {
+        orderBy: { sentAt: 'desc' },
+        select: { id: true, channel: true, sentAt: true, automatic: true },
+    },
+    userOffer: true,
+};
+
+const plainPlan = (p) =>
+    p ? { ...p, price: p.price != null ? Number(p.price) : null } : null;
+
 const getFeeById = asyncHandler(async (req, res) => {
-    const fee = await loadFee(req.params.id);
+    const id = req.params.id;
+
+    const fee = await prisma.feeRecord.findUnique({ where: { id }, select: FEE_DETAIL_SELECT });
     if (!fee) return feeNotFound(res);
-    res.json({ fee: serializeFee(fee) });
+
+    const [related, history] = await Promise.all([
+        fee.renewalGroupId
+            ? prisma.feeRecord.findMany({
+                  where: { renewalGroupId: fee.renewalGroupId, id: { not: id } },
+                  select: FEE_SELECT,
+                  orderBy: { createdAt: 'asc' },
+              })
+            : Promise.resolve([]),
+        prisma.feeRecord.findMany({
+            where: { memberId: fee.memberId, id: { not: id } },
+            select: FEE_SELECT,
+            orderBy: { createdAt: 'desc' },
+            take: 5,
+        }),
+    ]);
+
+    const base = serializeFee(fee);
+    const today = dateUtil.startOfToday();
+    const isCurrentPeriod =
+        fee.periodStart && fee.periodEnd
+            ? new Date(fee.periodStart) <= today && today <= new Date(fee.periodEnd)
+            : false;
+
+    res.json({
+        fee: { ...base, submittedDate: fee.submittedDate },
+        membership: {
+            planId: fee.planId,
+            plan: plainPlan(fee.plan),
+            isRenewal: base.isRenewal,
+            periodStart: fee.periodStart,
+            periodEnd: fee.periodEnd,
+            applied: base.applied,
+            appliedAt: fee.appliedAt,
+            isCurrentPeriod,
+            renewalGroupId: fee.renewalGroupId || null,
+        },
+        relatedFees: related.map(serializeFee),
+        reminders: fee.remindersSent,
+        approvedBy: fee.approvedBy || null,
+        offer: fee.userOffer || null,
+        memberHistory: history.map(serializeFee),
+    });
 });
 
 // ── POST /api/admin/fees ─────────────────────────────────────────────────────

@@ -82,16 +82,83 @@ const daysUntil = function (date) {
     return Math.round(diffMs / 86400000);
 };
 
-// ── GET /api/admin/members ──────────────────────────────────────────────────
-// Query params:
-//   search           — matches name, phone, email, or id (case-insensitive)
-//   status           — ACTIVE | EXPIRED | SUSPENDED | TRIAL | All (default All)
-//   planId           — filter to one membership plan
-//   trainerId        — filter to one assigned trainer ('unassigned' for none)
-//   checkedInToday   — 'true' to only show members checked in today
-//   overdueOnly      — 'true' to only show members with an overdue fee
-//   sortBy           — name | expiry | feeStatus | streak (default name)
-//   page, limit       — pagination (default page=1, limit=20)
+const MEMBER_SELECT = {
+    id: true,
+    name: true,
+    phone: true,
+    email: true,
+    status: true,
+    profileImageUrl: true,
+    membershipStart: true,
+    membershipEnd: true,
+    membershipPlan: { select: { id: true, name: true } },
+    assignedTrainer: { select: { id: true, name: true } },
+};
+
+const FEE_SORT_RANK = FEE_STATUS_SORT_ORDER; // existing map
+
+// ── helpers (all scoped to a given list of member ids) ──────────────────────
+
+// Latest fee per member. `distinct` + orderBy keeps the newest row per member.
+async function latestFeesFor(memberIds) {
+    if (!memberIds.length) return new Map();
+    const rows = await prisma.feeRecord.findMany({
+        where: { memberId: { in: memberIds } },
+        distinct: ['memberId'],
+        orderBy: [{ memberId: 'asc' }, { createdAt: 'desc' }],
+        select: { memberId: true, status: true, amount: true },
+    });
+    return new Map(rows.map((r) => [r.memberId, r]));
+}
+
+async function attendanceDaysFor(memberIds, windowStart) {
+    const byMember = new Map(); // memberId -> Set<dateString>
+    if (!memberIds.length) return byMember;
+    const rows = await prisma.attendance.findMany({
+        where: { memberId: { in: memberIds }, checkInAt: { gte: windowStart } },
+        select: { memberId: true, checkInAt: true },
+    });
+    for (const row of rows) {
+        const set = byMember.get(row.memberId) || new Set();
+        set.add(new Date(row.checkInAt).toDateString());
+        byMember.set(row.memberId, set);
+    }
+    return byMember;
+}
+
+// Members whose LATEST fee is OVERDUE. One indexed pass in SQL, returns ids only.
+// Table/column names assume Prisma defaults; adjust if you use @@map.
+async function overdueMemberIds() {
+    const rows = await prisma.$queryRaw`
+        SELECT f."memberId"
+        FROM (
+            SELECT DISTINCT ON ("memberId") "memberId", status
+            FROM "FeeRecord"
+            ORDER BY "memberId", "createdAt" DESC
+        ) f
+        JOIN "User" u ON u.id = f."memberId"
+        WHERE f.status = 'OVERDUE' AND u.role = 'MEMBER'
+    `;
+    return rows.map((r) => r.memberId);
+}
+
+// Global summary. Never affected by search/status/plan/trainer filters or paging.
+async function memberSummary(overdueIds) {
+    const grouped = await prisma.user.groupBy({
+        by: ['status'],
+        where: { role: 'MEMBER' },
+        _count: { _all: true },
+    });
+    const countOf = (s) => grouped.find((g) => g.status === s)?._count._all || 0;
+    return {
+        total: grouped.reduce((sum, g) => sum + g._count._all, 0),
+        active: countOf('ACTIVE'),
+        expired: countOf('EXPIRED'),
+        overdue: overdueIds.length,
+    };
+}
+
+// ── GET /api/admin/members ───────────────────────────────────────────────────
 const listMembers = asyncHandler(async (req, res) => {
     const {
         search = '',
@@ -105,17 +172,18 @@ const listMembers = asyncHandler(async (req, res) => {
         limit = '20',
     } = req.query;
 
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+
+    const today = dateUtil.startOfToday();
+    const windowStart = dateUtil.subDays(today, 90);
+
+    // ── 1. Filters (everything pushed into the DB query) ────────────────────
     const where = { role: 'MEMBER' };
 
-    if (status && status !== 'All') {
-        where.status = status; // ACTIVE | EXPIRED | SUSPENDED | TRIAL
-    }
-    if (planId) {
-        where.membershipPlanId = planId;
-    }
-    if (trainerId) {
-        where.assignedTrainerId = trainerId === 'unassigned' ? null : trainerId;
-    }
+    if (status && status !== 'All') where.status = status;
+    if (planId) where.membershipPlanId = planId;
+    if (trainerId) where.assignedTrainerId = trainerId === 'unassigned' ? null : trainerId;
     if (search.trim()) {
         where.OR = [
             { name: { contains: search, mode: 'insensitive' } },
@@ -125,68 +193,96 @@ const listMembers = asyncHandler(async (req, res) => {
         ];
     }
 
-    // Fetched in full (not paginated at the DB level) because feeStatus and
-    // streak/checkedInToday are computed, not stored — sorting and the
-    // overdueOnly/checkedInToday filters need those values resolved first.
-    // Fine for gym-scale member counts; revisit with a materialized view or
-    // a `currentFeeStatus` column on User if this ever needs to scale past
-    // a few thousand members.
-    const users = await prisma.user.findMany({
-        where,
-        select: {
-            id: true,
-            name: true,
-            phone: true,
-            email: true,
-            status: true,
-            profileImageUrl: true,
-            membershipStart: true,
-            membershipEnd: true,
-            membershipPlan: { select: { id: true, name: true } },
-            assignedTrainer: { select: { id: true, name: true } },
-        },
-    });
+    // Computed filters resolve to id lists (small, bounded sets), then become `id IN (...)`
+    const overdueIds = await overdueMemberIds(); // also feeds the global summary
+    let idLimit = null; // null = no restriction
 
-    const memberIds = users.map((u) => u.id);
-    const today = dateUtil.startOfToday();
-    const windowStart = dateUtil.subDays(today, 90);
+    if (overdueOnly === 'true') idLimit = overdueIds;
 
-    const [todayAttendance, recentAttendance, feeRows, holidays] = await Promise.all([
-        prisma.attendance.findMany({
-            where: { memberId: { in: memberIds }, checkInAt: { gte: dateUtil.startOfToday() } },
+    if (checkedInToday === 'true') {
+        const rows = await prisma.attendance.findMany({
+            where: { checkInAt: { gte: today } },
             distinct: ['memberId'],
             select: { memberId: true },
-        }),
-        prisma.attendance.findMany({
-            where: { memberId: { in: memberIds }, checkInAt: { gte: dateUtil.subDays(dateUtil.startOfToday(), 90) } },
-            select: { memberId: true, checkInAt: true },
-        }),
-        prisma.feeRecord.findMany({
-            where: { memberId: { in: memberIds } },
-            orderBy: { createdAt: 'desc' },
-            select: { memberId: true, status: true, amount: true },
-        }),
+        });
+        const todayIds = rows.map((r) => r.memberId);
+        idLimit = idLimit ? idLimit.filter((id) => todayIds.includes(id)) : todayIds;
+    }
+    if (idLimit) where.id = { in: idLimit };
+
+    // ── 2. Fetch exactly one page of members ────────────────────────────────
+    const total = await prisma.user.count({ where });
+    let pageUsers;
+
+    if (sortBy === 'streak' || sortBy === 'feeStatus') {
+        // Computed sort keys can't be expressed in the query. Resolve them for
+        // ids only (no full rows), sort, slice, then load just the page rows.
+        const candidates = await prisma.user.findMany({
+            where,
+            select: { id: true },
+            orderBy: [{ name: 'asc' }, { id: 'asc' }], // stable tiebreak
+        });
+        const candidateIds = candidates.map((c) => c.id);
+
+        let rank;
+        if (sortBy === 'streak') {
+            const [days, holidays] = await Promise.all([
+                attendanceDaysFor(candidateIds, windowStart),
+                fetchHolidays(windowStart, today),
+            ]);
+            const isOffDay = buildOffDayChecker(holidays);
+            rank = new Map(
+                candidateIds.map((id) => [id, -computeStreak(days.get(id) || new Set(), today, isOffDay)])
+            );
+        } else {
+            const fees = await latestFeesFor(candidateIds);
+            rank = new Map(
+                candidateIds.map((id) => [id, FEE_SORT_RANK[mapFeeStatus(fees.get(id)?.status)] ?? 9])
+            );
+        }
+
+        const pageIds = [...candidateIds]
+            .sort((a, b) => rank.get(a) - rank.get(b)) // stable: name order is kept for ties
+            .slice((pageNum - 1) * limitNum, pageNum * limitNum);
+
+        const rows = await prisma.user.findMany({ where: { id: { in: pageIds } }, select: MEMBER_SELECT });
+        const byId = new Map(rows.map((u) => [u.id, u]));
+        pageUsers = pageIds.map((id) => byId.get(id)).filter(Boolean);
+    } else {
+        // name / expiry: real DB-level pagination
+        const orderBy =
+            sortBy === 'expiry'
+                ? [{ membershipEnd: { sort: 'asc', nulls: 'last' } }, { id: 'asc' }]
+                : [{ name: 'asc' }, { id: 'asc' }];
+
+        pageUsers = await prisma.user.findMany({
+            where,
+            select: MEMBER_SELECT,
+            orderBy,
+            skip: (pageNum - 1) * limitNum,
+            take: limitNum,
+        });
+    }
+
+    // ── 3. Computed fields, only for the members on this page ───────────────
+    const pageIds = pageUsers.map((u) => u.id);
+    const [todayRows, days, fees, holidays] = await Promise.all([
+        pageIds.length
+            ? prisma.attendance.findMany({
+                  where: { memberId: { in: pageIds }, checkInAt: { gte: today } },
+                  distinct: ['memberId'],
+                  select: { memberId: true },
+              })
+            : [],
+        attendanceDaysFor(pageIds, windowStart),
+        latestFeesFor(pageIds),
         fetchHolidays(windowStart, today),
     ]);
     const isOffDay = buildOffDayChecker(holidays);
+    const checkedInSet = new Set(todayRows.map((a) => a.memberId));
 
-    const checkedInTodaySet = new Set(todayAttendance.map((a) => a.memberId));
-
-    const attendanceByMember = new Map(); // memberId -> Set<dateString>
-    for (const row of recentAttendance) {
-        const set = attendanceByMember.get(row.memberId) || new Set();
-        set.add(new Date(row.checkInAt).toDateString());
-        attendanceByMember.set(row.memberId, set);
-    }
-
-    // feeRows is ordered newest-first, so the first match per member is latest
-    const latestFeeByMember = new Map();
-    for (const row of feeRows) {
-        if (!latestFeeByMember.has(row.memberId)) latestFeeByMember.set(row.memberId, row);
-    }
-
-    let members = users.map((u) => {
-        const latestFee = latestFeeByMember.get(u.id);
+    const members = pageUsers.map((u) => {
+        const latestFee = fees.get(u.id);
         return {
             id: u.id,
             name: u.name,
@@ -201,54 +297,18 @@ const listMembers = asyncHandler(async (req, res) => {
             daysLeft: daysUntil(u.membershipEnd),
             trainer: u.assignedTrainer?.name || 'Unassigned',
             trainerId: u.assignedTrainer?.id || null,
-            checkedInToday: checkedInTodaySet.has(u.id),
-            workoutStreak: computeStreak(attendanceByMember.get(u.id) || new Set(), today, isOffDay),
+            checkedInToday: checkedInSet.has(u.id),
+            workoutStreak: computeStreak(days.get(u.id) || new Set(), today, isOffDay),
             feeStatus: mapFeeStatus(latestFee?.status),
             amount: Number(latestFee?.amount || 0),
         };
     });
 
-    if (checkedInToday === 'true') {
-        members = members.filter((m) => m.checkedInToday);
-    }
-    if (overdueOnly === 'true') {
-        members = members.filter((m) => m.feeStatus === 'overdue');
-    }
-
-    switch (sortBy) {
-        case 'expiry':
-            members.sort((a, b) => a.daysLeft - b.daysLeft);
-            break;
-        case 'feeStatus':
-            members.sort(
-                (a, b) => FEE_STATUS_SORT_ORDER[a.feeStatus] - FEE_STATUS_SORT_ORDER[b.feeStatus]
-            );
-            break;
-        case 'streak':
-            members.sort((a, b) => b.workoutStreak - a.workoutStreak);
-            break;
-        default:
-            members.sort((a, b) => a.name.localeCompare(b.name));
-    }
-
-    const pageNum = Math.max(1, parseInt(page, 10) || 1);
-    const limitNum = Math.max(1, parseInt(limit, 10) || 20);
-    const total = members.length;
-    const start = (pageNum - 1) * limitNum;
-    const paged = members.slice(start, start + limitNum);
-
-    // summary counts reflect the search/status/plan/trainer filters but not
-    // checkedInToday/overdueOnly, mirroring the screen's top stat row which
-    // stays fixed while filter chips change the list below it
+    // ── 4. Response ─────────────────────────────────────────────────────────
     res.json({
-        members: paged,
+        members,
         pagination: { page: pageNum, limit: limitNum, total, totalPages: Math.ceil(total / limitNum) },
-        summary: {
-            total,
-            active: members.filter((m) => m.status === 'ACTIVE').length,
-            expired: members.filter((m) => m.status === 'EXPIRED').length,
-            overdue: members.filter((m) => m.feeStatus === 'overdue').length,
-        },
+        summary: await memberSummary(overdueIds), // all members, regardless of filters
     });
 });
 
