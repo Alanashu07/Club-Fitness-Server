@@ -1,7 +1,7 @@
 import dateUtil from '../../utils/date.js';
 import prisma from '../../config/db.js';
 import { hashPassword } from '../../utils/password.js';
-import { sendWelcomeEmail } from '../../utils/mailer.js';
+import { sendWelcomeEmail, sendRenewalEmail } from '../../utils/mailer.js';
 import checkinService from '../device/checkin.service.js';
 import commandQueue from '../device/device-command-queue.service.js';
 import env from '../../config/env.js';
@@ -1343,7 +1343,7 @@ const renewMembership = asyncHandler(async (req, res) => {
         }),
     ]);
 
-    return res.status(201).json({
+    res.status(201).json({
         feeRecord: updatedFee,   // main record, kept for backward compatibility
         feeRecords,              // all records created (1 or 2)
         member: updatedMember,
@@ -1355,6 +1355,8 @@ const renewMembership = asyncHandler(async (req, res) => {
             ? 'Membership renewed and active now.'
             : `Renewal scheduled. The new plan takes effect on ${periodStart.toISOString()}.`,
     });
+
+    sendRenewalEmail(updatedFee.id);
 });
 
 // ── DELETE /api/v1/admin/members/:id/renew/last ─────────────────────────────

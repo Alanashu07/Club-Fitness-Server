@@ -3,8 +3,7 @@ import prisma from '../config/db.js';
 import checkinService from '../modules/device/checkin.service.js';
 import env from '../config/env.js';
 import memberController from '../modules/members/members.controller.js';
-
-const GRACE_ENTRIES_ALLOWED = env.GRACE_ENTRIES_ALLOWED;
+import { runMembershipEmailJobs } from './membership-reminder.js';
 
 // Only needed when GRACE_ENTRIES_ALLOWED = 0 (block immediately on expiry).
 // With grace entries enabled, handleCheckInEvent already blocks on the 3rd
@@ -15,6 +14,7 @@ export const startCronJob = function () {
         await expireMemberships();
         const applied = await memberController.applyDueRenewals();
         if (applied) console.log(`[CRON] Applied ${applied} renewals`);
+        await runMembershipEmailJobs();
     })
 }
 
