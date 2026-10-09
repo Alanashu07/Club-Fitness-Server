@@ -27,11 +27,13 @@ model User {
   medicalNotes     String?
 
   // Membership (only relevant for MEMBER role)
-  membershipPlanId   String?
-  membershipPlan     MembershipPlan? @relation("MemberPlan", fields: [membershipPlanId], references: [id])
-  membershipStart    DateTime?
-  membershipEnd      DateTime?
-  contentAccessUntil DateTime? // grace period override (admin-configurable)
+  membershipPlanId      String?
+  membershipPlan        MembershipPlan? @relation("MemberPlan", fields: [membershipPlanId], references: [id])
+  membershipStart       DateTime?
+  membershipEnd         DateTime?
+  contentAccessUntil    DateTime? // grace period override (admin-configurable)
+  expiryReminderSentFor DateTime?
+  expiredEmailSentFor   DateTime?
 
   // Trainer assignment (for MEMBER role)
   assignedTrainerId String?

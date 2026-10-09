@@ -78,6 +78,7 @@ enum NotificationChannel {
   PUSH
   WHATSAPP
   SMS
+  EMAIL
 }
 
 enum FacilityStatus {
