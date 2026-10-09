@@ -146,7 +146,7 @@ const sendRenewalEmail = async function (feeRecordId) {
     });
 
     await sendEmail({
-        to: toEmail,
+        to: fee.member.email,
         subject: `Membership renewed – valid until ${fmtDate(periodEnd)} 🔥`,
         html,
         text: `Hi ${fee.member.name}, your ${fee.plan.name} membership has been renewed and is valid until ${fmtDate(periodEnd)}. Thank you!`,
@@ -165,22 +165,22 @@ function baseVars(fee) {
     const paid = Number(fee.paidAmount ?? 0);
     const due = Number(fee.amount) - paid;
     return {
-        logo_url: process.env.LOGO_URL,
+        logo_url: env.LOGO_URL,
         name: fee.member.name,
         plan_name: fee.plan.name,
         member_id: fee.member.id,
         due_date: fmtDate(fee.dueDate),
         amount_due: fmtMoney(due),
         paid_amount: paid > 0 ? fmtMoney(paid) : null, // shown only for partial payments
-        upi_id: process.env.UPI_ID,
-        cta_url: `${process.env.APP_URL}/payments/${fee.id}`,
+        upi_id: env.UPI_ID,
+        cta_url: `${env.APP_URL}/payments/${fee.id}`,
         cta_label: 'Pay Now',
-        support_email: process.env.SUPPORT_EMAIL,
-        support_phone: process.env.SUPPORT_PHONE,
-        instagram_url: process.env.INSTAGRAM_URL,
-        facebook_url: process.env.FACEBOOK_URL,
+        support_email: env.SUPPORT_EMAIL,
+        support_phone: env.SUPPORT_PHONE,
+        instagram_url: env.INSTAGRAM_URL,
+        facebook_url: env.FACEBOOK_URL,
         year: new Date().getFullYear(),
-        gym_address: process.env.GYM_ADDRESS,
+        gym_address: env.GYM_ADDRESS,
     };
 }
 
@@ -242,6 +242,7 @@ async function deliver(fee, { subject, html, text, automatic }) {
         html,
         text: text,
     });
+    if (!sent) throw new Error(`Failed to send "${subject}" to ${fee.member.email}`);
     await prisma.$transaction([
         prisma.feeReminder.create({
             data: { feeRecordId: fee.id, channel: 'EMAIL', automatic },
@@ -257,6 +258,9 @@ async function deliver(fee, { subject, html, text, automatic }) {
     ]);
     console.log(`Sent "${subject}" to ${fee.member.email}`);
 }
+
+const overdueText = (days) =>
+    days > 0 ? `${days} ${days === 1 ? 'day' : 'days'} ago` : null;
 
 async function sendFeeReminderEmail(feeRecordId, { automatic = true } = {}) {
     const fee = await loadFee(feeRecordId);
@@ -290,8 +294,7 @@ async function sendFeeOverdueEmail(feeRecordId, { automatic = true } = {}) {
     const template = await loadTemplate(FEE_OVERDUE_TEMPLATE_PATH, __dirname);
     const html = Mustache.render(template, {
         ...baseVars(fee),
-        days_overdue: daysOverdue,
-        days_overdue_plural: daysOverdue > 1,
+        days_overdue_text: overdueText(daysOverdue),
     });
 
     return deliver(fee, {
@@ -332,8 +335,7 @@ async function sendExpiredNoticeEmail(member, now = new Date()) {
     const html = Mustache.render(template, {
         ...membershipBaseVars(member),
         due_date: fmtDate(member.membershipEnd),
-        days_overdue: daysOverdue,
-        days_overdue_plural: daysOverdue > 1,
+        days_overdue_text: overdueText(daysOverdue),
     });
 
     return deliverMembershipMail(member, {

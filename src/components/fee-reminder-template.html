@@ -18,8 +18,7 @@
                                 Friendly reminder, {{name}} ⏰
                             </h1>
                             <p style="font-size:14px;color:#B0B0B0;margin:0;line-height:1.6;">
-                                Your membership fee is due {{#if days_left_label}}<strong
-                                    style="color:#FFFFFF;">{{days_left_label}}</strong>{{else}}soon{{/if}}.
+                                Your membership fee is due <strong style="color:#FFFFFF;">{{days_left_label}}</strong>.
                                 Pay on time to keep your access uninterrupted.
                             </p>
                         </td>
@@ -42,14 +41,14 @@
                                         style="font-size:13px;color:#FFFFFF;font-weight:600;padding-bottom:8px;">
                                         {{due_date}}</td>
                                 </tr>
-                                {{#if paid_amount}}
+                                {{#paid_amount}}
                                 <tr>
                                     <td style="font-size:13px;color:#B0B0B0;padding-bottom:8px;">Already paid</td>
                                     <td align="right"
                                         style="font-size:13px;color:#4CAF50;font-weight:600;padding-bottom:8px;">
                                         ₹{{paid_amount}}</td>
                                 </tr>
-                                {{/if}}
+                                {{/paid_amount}}
                                 <tr>
                                     <td style="font-size:13px;color:#B0B0B0;padding-bottom:8px;">Amount due</td>
                                     <td align="right"
@@ -86,9 +85,10 @@
                                     <td width="50%" style="padding-bottom:14px;vertical-align:top;">
                                         <p style="margin:0;font-size:14px;font-weight:600;color:#FFFFFF;">📱 UPI</p>
                                         <p style="margin:4px 0 0;font-size:13px;color:#B0B0B0;line-height:1.5;">
-                                            {{#if upi_id}}Pay to <strong style="color:#FFFFFF;">{{upi_id}}</strong> and
-                                            upload the receipt in the app.{{else}}Pay through the app and upload your
-                                            receipt.{{/if}}
+                                            {{#upi_id}}Pay to <strong style="color:#FFFFFF;">{{upi_id}}</strong> and
+                                            upload the receipt in the app.{{/upi_id}}{{^upi_id}}Pay through the app and
+                                            upload your
+                                            receipt.{{/upi_id}}
                                         </p>
                                     </td>
                                     <td width="50%" style="padding-bottom:14px;vertical-align:top;">
