@@ -1,7 +1,9 @@
-import PDFDocument from 'pdfkit';
 import ExcelJS from 'exceljs';
 import prisma from '../../config/db.js';
-
+import {
+  formatCurrency, createPdf, drawTitleBand, drawSectionTitle,
+  drawKpiCards, drawTable, addPageNumbers,
+} from '../../utils/pdf-report-kit.js';
 // ============================================================================
 // Shared sales-report data builder. Both the JSON endpoint and the PDF/Excel
 // exports pull from this single function so the numbers always match —
@@ -107,10 +109,6 @@ function pct(current, previous) {
 
 function toNumber(decimal) {
   return decimal === null || decimal === undefined ? 0 : Number(decimal);
-}
-
-function formatCurrency(value) {
-  return `Rs. ${Number(value).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 // ── membership + shop revenue for an arbitrary window ───────────────────────
@@ -357,274 +355,56 @@ const getSalesReport = async function (req, res, next) {
   }
 };
 
-// ============================================================================
-// GET /api/reports/sales/export/pdf
-//
-// Professional, multi-page report:
-//   - Branded header band (title + range + generated-at)
-//   - 2x2 KPI card grid with colored accent bars and up/down deltas
-//   - Plan Performance table
-//   - Full Transaction Log table (every status, not just paid)
-// All tables use flex-ratio column widths computed from the actual content
-// width, so nothing is ever clipped regardless of page size or margins.
-// Every page gets a running header + a "Page X of Y" footer.
-// ============================================================================
-
-const PAGE_MARGIN = 40;
-const BRAND_COLOR = '#C41E2D';
-
-function contentWidth(doc) {
-  return doc.page.width - PAGE_MARGIN * 2;
-}
-
-// Turns { flex } columns into concrete pixel widths that always sum exactly
-// to the available content width (last column absorbs any rounding).
-function resolveColumnWidths(doc, columns) {
-  const totalFlex = columns.reduce((s, c) => s + c.flex, 0);
-  const width = contentWidth(doc);
-  let used = 0;
-  const resolved = columns.map((c, i) => {
-    if (i === columns.length - 1) {
-      return { ...c, width: width - used };
-    }
-    const w = Math.floor((c.flex / totalFlex) * width);
-    used += w;
-    return { ...c, width: w };
-  });
-  return resolved;
-}
-
-function drawRunningHeader(doc, title) {
-  doc
-    .font('Helvetica-Bold')
-    .fontSize(9)
-    .fillColor('#999999')
-    .text(title, PAGE_MARGIN, 20, { width: contentWidth(doc), align: 'left' });
-  doc
-    .strokeColor('#EEEEEE')
-    .lineWidth(1)
-    .moveTo(PAGE_MARGIN, 34)
-    .lineTo(doc.page.width - PAGE_MARGIN, 34)
-    .stroke();
-  doc.y = 46;
-}
-
-function drawSectionTitle(doc, text) {
-  if (doc.y > doc.page.height - PAGE_MARGIN - 60) {
-    doc.addPage();
-  }
-  doc.moveDown(0.6);
-  doc
-    .font('Helvetica-Bold')
-    .fontSize(13)
-    .fillColor('#111111')
-    .text(text, PAGE_MARGIN, doc.y, { width: contentWidth(doc) });
-  doc.moveDown(0.3);
-  doc
-    .strokeColor(BRAND_COLOR)
-    .lineWidth(1.5)
-    .moveTo(PAGE_MARGIN, doc.y)
-    .lineTo(PAGE_MARGIN + 40, doc.y)
-    .stroke();
-  doc.moveDown(0.6);
-}
-
-// Generic aligned table renderer. Column widths are flex-based (always fit
-// the page), text is truncated with an ellipsis instead of wrapping so rows
-// stay a fixed height, and the header repeats on every new page.
-function drawTable(doc, { columns: rawColumns, rows, runningHeaderTitle }) {
-  const columns = resolveColumnWidths(doc, rawColumns);
-  const rowHeight = 22;
-  const headerHeight = 24;
-  const bottomLimit = doc.page.height - PAGE_MARGIN;
-  const tableWidth = contentWidth(doc);
-  let tableTop = doc.y;
-
-  function drawHeader() {
-    const y = doc.y;
-    doc.rect(PAGE_MARGIN, y, tableWidth, headerHeight).fill('#1F2933');
-    let x = PAGE_MARGIN;
-    doc.font('Helvetica-Bold').fontSize(8.5).fillColor('#FFFFFF');
-    for (const col of columns) {
-      doc.text(col.label, x + 6, y + 8, {
-        width: col.width - 12,
-        align: col.align,
-        lineBreak: false,
-      });
-      x += col.width;
-    }
-    doc.y = y + headerHeight;
-  }
-
-  function drawGridLines(y) {
-    // subtle vertical separators between columns for a cleaner, tabular look
-    let x = PAGE_MARGIN;
-    doc.strokeColor('#E5E7EB').lineWidth(0.5);
-    for (const col of columns) {
-      x += col.width;
-      if (x < PAGE_MARGIN + tableWidth - 1) {
-        doc.moveTo(x, y).lineTo(x, y + rowHeight).stroke();
-      }
-    }
-  }
-
-  drawHeader();
-
-  rows.forEach((row, i) => {
-    if (doc.y + rowHeight > bottomLimit) {
-      doc.addPage();
-      if (runningHeaderTitle) drawRunningHeader(doc, runningHeaderTitle);
-      tableTop = doc.y;
-      drawHeader();
-    }
-
-    const y = doc.y;
-    if (i % 2 === 1) {
-      doc.rect(PAGE_MARGIN, y, tableWidth, rowHeight).fill('#F5F6F8');
-    }
-    drawGridLines(y);
-
-    let x = PAGE_MARGIN;
-    doc.font('Helvetica').fontSize(9).fillColor('#222222');
-    for (const col of columns) {
-      const cellValue = row[col.key] ?? '';
-      doc.text(String(cellValue), x + 6, y + 6, {
-        width: col.width - 12,
-        align: col.align,
-        lineBreak: false,
-        ellipsis: true,
-      });
-      x += col.width;
-    }
-    doc.y = y + rowHeight;
-  });
-
-  // outer border around the table section drawn since the last header/page break
-  doc.strokeColor('#D0D3D8').lineWidth(0.75);
-  doc.rect(PAGE_MARGIN, tableTop, tableWidth, doc.y - tableTop).stroke();
-
-  doc.moveDown(1);
-}
-
-function drawKpiCards(doc, cards) {
-  const gap = 14;
-  const cardWidth = (contentWidth(doc) - gap) / 2;
-  const cardHeight = 62;
-
-  cards.forEach((card, i) => {
-    const col = i % 2;
-    const row = Math.floor(i / 2);
-    const x = PAGE_MARGIN + col * (cardWidth + gap);
-    const y = doc.y + row * (cardHeight + gap);
-
-    doc.roundedRect(x, y, cardWidth, cardHeight, 6).fillAndStroke('#FAFAFA', '#E5E7EB');
-    // accent bar
-    doc.rect(x, y, 4, cardHeight).fill(card.accent);
-
-    doc
-      .font('Helvetica')
-      .fontSize(9)
-      .fillColor('#666666')
-      .text(card.label.toUpperCase(), x + 16, y + 10, { width: cardWidth - 30, lineBreak: false });
-
-    doc
-      .font('Helvetica-Bold')
-      .fontSize(16)
-      .fillColor('#111111')
-      .text(card.value, x + 16, y + 24, { width: cardWidth - 30, lineBreak: false });
-
-    doc
-      .font('Helvetica-Bold')
-      .fontSize(9)
-      .fillColor(card.neutral ? '#888888' : card.positive ? '#2E7D32' : '#C41E2D')
-      .text(card.change, x + 16, y + 44, { width: cardWidth - 30, lineBreak: false });
-  });
-
-  const rowsUsed = Math.ceil(cards.length / 2);
-  doc.y = doc.y + rowsUsed * (cardHeight + gap);
-}
-
-function addPageNumbers(doc) {
-  const range = doc.bufferedPageRange();
-  for (let i = range.start; i < range.start + range.count; i++) {
-    doc.switchToPage(i);
-    doc
-      .font('Helvetica')
-      .fontSize(8)
-      .fillColor('#999999')
-      .text(
-        `Page ${i - range.start + 1} of ${range.count}`,
-        PAGE_MARGIN,
-        doc.page.height - 26,
-        { width: contentWidth(doc), align: 'center' },
-      );
-  }
-}
-
 const pdfDelta = (v, suffix = '') =>
-  v == null ? 'No previous period data' : `${v >= 0 ? '▲' : '▼'} ${Math.abs(v)}${suffix} vs previous period`;
+  v == null ? 'No previous period data' : `${v >= 0 ? '+' : '-'}${Math.abs(v)}${suffix} vs previous period`;
 
 const exportSalesPdf = async function (req, res, next) {
   try {
     const data = await buildSalesReportData(reportParams(req, 500));
+    const { kpis } = data;
 
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', 'attachment; filename="sales-report.pdf"');
+    const doc = createPdf(res, 'sales-report.pdf');
 
-    const doc = new PDFDocument({ size: 'A4', margin: PAGE_MARGIN, bufferPages: true });
-    doc.pipe(res);
+    drawTitleBand(doc, {
+      title: 'Sales Report',
+      subtitle: `${data.rangeLabel}  ·  Generated ${new Date().toLocaleString('en-IN')}`,
+    });
 
-    // ── Title block ──────────────────────────────────────────────────────
-    doc.rect(0, 0, doc.page.width, 90).fill(BRAND_COLOR);
-    doc.fillColor('#FFFFFF').font('Helvetica-Bold').fontSize(22).text('Sales Report', PAGE_MARGIN, 28);
-    doc
-      .font('Helvetica')
-      .fontSize(10)
-      .fillColor('#FDECEC')
-      .text(
-        `${data.rangeLabel}  ·  Generated ${new Date().toLocaleString('en-IN')}`,
-        PAGE_MARGIN,
-        56,
-      );
-    doc.y = 112;
-
-    // ── KPI summary cards ────────────────────────────────────────────────
     drawSectionTitle(doc, 'Summary');
     drawKpiCards(doc, [
       {
         label: 'Total Revenue',
-        value: formatCurrency(data.kpis.totalRevenue.value),
-        change: pdfDelta(data.kpis.totalRevenue.changePercent, '%'),
-        neutral: data.kpis.totalRevenue.changePercent == null,
-        positive: data.kpis.totalRevenue.positive,
-        accent: BRAND_COLOR,
+        value: formatCurrency(kpis.totalRevenue.value),
+        change: pdfDelta(kpis.totalRevenue.changePercent, '%'),
+        neutral: kpis.totalRevenue.changePercent == null,
+        positive: kpis.totalRevenue.positive,
+        accent: '#C41E2D',
       },
       {
         label: 'Memberships Sold',
-        value: String(data.kpis.membershipsSold.value),
-        change: pdfDelta(data.kpis.membershipsSold.delta),
-        neutral: data.kpis.membershipsSold.delta == null,
-        positive: data.kpis.membershipsSold.positive,
+        value: String(kpis.membershipsSold.value),
+        change: pdfDelta(kpis.membershipsSold.delta),
+        neutral: kpis.membershipsSold.delta == null,
+        positive: kpis.membershipsSold.positive,
         accent: '#7B1FA2',
       },
       {
         label: 'Shop Sales',
-        value: formatCurrency(data.kpis.shopSales.value),
-        change: pdfDelta(data.kpis.shopSales.changePercent, '%'),
-        neutral: data.kpis.shopSales.changePercent == null,
-        positive: data.kpis.shopSales.positive,
+        value: formatCurrency(kpis.shopSales.value),
+        change: pdfDelta(kpis.shopSales.changePercent, '%'),
+        neutral: kpis.shopSales.changePercent == null,
+        positive: kpis.shopSales.positive,
         accent: '#29B6F6',
       },
       {
         label: 'Outstanding Dues',
-        value: formatCurrency(data.kpis.outstandingDues.value),
-        change: `${data.kpis.outstandingDues.memberCount} members owing`,
+        value: formatCurrency(kpis.outstandingDues.value),
+        change: `${kpis.outstandingDues.memberCount} members owing`,
         positive: false,
         accent: '#FFA000',
       },
     ]);
 
-    // ── Plan performance ─────────────────────────────────────────────────
     drawSectionTitle(doc, 'Plan Performance');
     drawTable(doc, {
       runningHeaderTitle: 'Sales Report — Plan Performance (cont.)',
@@ -642,7 +422,6 @@ const exportSalesPdf = async function (req, res, next) {
       })),
     });
 
-    // ── Transaction log ──────────────────────────────────────────────────
     drawSectionTitle(doc, `Transaction Log (${data.transactions.length} records)`);
     drawTable(doc, {
       runningHeaderTitle: 'Sales Report — Transaction Log (cont.)',
