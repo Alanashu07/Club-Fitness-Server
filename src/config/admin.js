@@ -1047,10 +1047,17 @@ const adminRouter = AdminJSExpress.buildAuthenticatedRouter(
 );
 
 export default async (app) => {
-  if (env.NODE_ENV === 'production') {
-    await admin.initialize(); // bundles custom components once at startup
-  } else {
-    await admin.watch(); // bundles and rebuilds on change
+  // if (env.NODE_ENV === 'production') {
+  //   await admin.initialize(); // bundles custom components once at startup
+  // } else {
+  //   await admin.watch(); // bundles and rebuilds on change
+  // }
+  try {
+    await admin.watch();
+    console.log('✅ AdminJS bundle ready');
+  } catch (err) {
+    console.error('❌ AdminJS bundling failed:', err);
+    throw err;
   }
 
   app.use(admin.options.rootPath, adminRouter);
