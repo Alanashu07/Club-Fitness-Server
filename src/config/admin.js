@@ -7,7 +7,7 @@
 //   import setupAdmin from './admin.js';
 //   await setupAdmin(app);
 //
-import AdminJS from 'adminjs';
+import AdminJS, { ComponentLoader } from 'adminjs';
 import AdminJSExpress from '@adminjs/express';
 import { Database, Resource } from '@adminjs/prisma';
 import { PrismaClient, Prisma } from '@prisma/client';
@@ -18,6 +18,19 @@ import prisma from './db.js';
 import env from './env.js';
 import checkinService from '../modules/device/checkin.service.js';
 import commandQueue from '../modules/device/device-command-queue.service.js';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { getDeletionImpact, hardDeleteUser } from '../utils/member-delete.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+const componentLoader = new ComponentLoader();
+const Components = {
+  MemberDeleteConfirm: componentLoader.add(
+    'MemberDeleteConfirm',
+    path.join(__dirname, '../components/member-delete-confirm')
+  ),
+};
 
 AdminJS.registerAdapter({ Database, Resource });
 
@@ -33,6 +46,7 @@ const getDMMFModelByName = (modelName) => {
 };
 
 const admin = new AdminJS({
+  componentLoader,
   resources: [
     // ==================
     // USERS & MEMBERSHIP
@@ -133,6 +147,54 @@ const admin = new AdminJS({
               return request;
             },
           },
+          // Read-only preview used by the delete confirmation screen
+          deletePreview: {
+            actionType: 'record',
+            isVisible: false,
+            component: false,
+            handler: async (request, response, context) => {
+              const { record, currentAdmin } = context;
+              const impact = await getDeletionImpact(record.params.id);
+              return { record: record.toJSON(currentAdmin), impact };
+            },
+          },
+
+          // Replaces the default delete: preview, then confirm, then hard delete
+          delete: {
+            guard: '', // the custom screen is the confirmation
+            component: Components.MemberDeleteConfirm,
+            handler: async (request, response, context) => {
+              const { record, currentAdmin, resource, h } = context;
+              const id = record.params.id;
+              const json = record.toJSON(currentAdmin);
+
+              if (request.method !== 'post') return { record: json };
+
+              if (currentAdmin?.id === id) {
+                return { record: json, notice: { message: 'You cannot delete your own account.', type: 'error' } };
+              }
+
+              const result = await hardDeleteUser(id);
+
+              if (!result.ok) {
+                return { record: json, notice: { message: result.message, type: 'error' } };
+              }
+
+              return {
+                record: json,
+                redirectUrl: h.resourceUrl({ resourceId: resource.id() }),
+                notice: {
+                  message: result.warnings.length
+                    ? `${result.name} deleted. ${result.warnings.join(' ')}`
+                    : `${result.name} deleted. Device removal command queued.`,
+                  type: result.warnings.length ? 'info' : 'success',
+                },
+              };
+            },
+          },
+
+          // Bulk delete would skip the preview and the device cleanup
+          bulkDelete: { isAccessible: false },
 
           // ── device action buttons (shown on the record's Show page) ─────
 
@@ -985,6 +1047,12 @@ const adminRouter = AdminJSExpress.buildAuthenticatedRouter(
 );
 
 export default async (app) => {
+  if (env.NODE_ENV === 'production') {
+    await admin.initialize(); // bundles custom components once at startup
+  } else {
+    await admin.watch(); // bundles and rebuilds on change
+  }
+
   app.use(admin.options.rootPath, adminRouter);
   const url = env.NODE_ENV === "production" ? "https://api.clubfitness.co.in" : "http://localhost:3000";
   console.log(`✅ AdminJS available at ${url}${admin.options.rootPath}`);

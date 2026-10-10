@@ -218,11 +218,17 @@ async function loadFee(feeRecordId) {
     return fee;
 }
 
-async function deliverMembershipMail(member, { subject, html, text, sentField }) {
+async function deliverMembershipMail(member, { subject, html, text, sentField, automatic = true}) {
     const sent = await sendEmail({ to: member.email, subject, html, text });
     if (!sent) throw new Error(`Failed to send "${subject}" to ${member.email}`);
 
-    await prisma.$transaction([
+    const latestFee = await prisma.feeRecord.findFirst({
+        where: { memberId: member.id },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true },
+    });
+
+    const operations = [
         prisma.user.update({
             where: { id: member.id },
             data: { [sentField]: member.membershipEnd }, // dedupe key = the expiry date it was sent for
@@ -230,7 +236,19 @@ async function deliverMembershipMail(member, { subject, html, text, sentField })
         prisma.notification.create({
             data: { userId: member.id, title: subject, body: text, channel: 'EMAIL' },
         }),
-    ]);
+    ];
+
+    if (latestFee) {
+        operations.push(
+            prisma.feeReminder.create({
+                data: { feeRecordId: latestFee.id, channel: 'EMAIL', automatic },
+            })
+        );
+    } else {
+        console.warn(`Member ${member.id} has no fee record, skipping FeeReminder log`);
+    }
+
+    await prisma.$transaction(operations);
     console.log(`Sent "${subject}" to ${member.email}`);
 }
 
@@ -305,9 +323,20 @@ async function sendFeeOverdueEmail(feeRecordId, { automatic = true } = {}) {
     });
 }
 
-async function sendExpiryReminderEmail(member, now = new Date()) {
+function formatHour(hoursLeft) {
+    if(hoursLeft <= 1) return 'an hour';
+    if(hoursLeft <= 24) return `${hoursLeft} hours`;
+    const days = Math.floor(hoursLeft / 24);
+    if(days === 1) return 'a day';
+    if(days <= 30) return `${days} days`;
+    const months = Math.floor(days / 30);
+    if(months === 1) return 'a month';
+    return `${months} months`;
+}
+
+async function sendExpiryReminderEmail(member, now = new Date(), { automatic = true } = {}) {
     const hoursLeft = Math.max(Math.ceil((member.membershipEnd - now) / (60 * 60 * 1000)), 1);
-    const label = hoursLeft <= 1 ? 'within the hour' : `in about ${hoursLeft} hours`;
+    const label = hoursLeft <= 1 ? 'within an hour' : `in about ${formatHour(hoursLeft)}`;
 
     const __filename = fileURLToPath(import.meta.url);
     const __dirname = path.dirname(__filename);
@@ -321,12 +350,13 @@ async function sendExpiryReminderEmail(member, now = new Date()) {
     return deliverMembershipMail(member, {
         sentField: 'expiryReminderSentFor',
         subject: `Your membership expires ${label} ⏰`,
+        automatic,
         html,
         text: `Hi ${member.name}, your ${member.membershipPlan.name} membership expires on ${fmtDateTime(member.membershipEnd)}. Renew to keep your access.`,
     });
 }
 
-async function sendExpiredNoticeEmail(member, now = new Date()) {
+async function sendExpiredNoticeEmail(member, now = new Date(), { automatic = true } = {}) {
     const daysOverdue = Math.floor((now - member.membershipEnd) / DAY); // 0 on the first day; template hides it then
 
     const __filename = fileURLToPath(import.meta.url);
@@ -341,6 +371,7 @@ async function sendExpiredNoticeEmail(member, now = new Date()) {
     return deliverMembershipMail(member, {
         sentField: 'expiredEmailSentFor',
         subject: 'Your membership has expired – renew to continue',
+        automatic,
         html,
         text: `Hi ${member.name}, your ${member.membershipPlan.name} membership expired on ${fmtDate(member.membershipEnd)}. Please renew to continue using the gym.`,
     });

@@ -1,7 +1,12 @@
 import dateUtil from '../../utils/date.js';
 import prisma from '../../config/db.js';
 import { hashPassword } from '../../utils/password.js';
-import { sendWelcomeEmail, sendRenewalEmail } from '../../utils/mailer.js';
+import {
+    sendWelcomeEmail,
+    sendRenewalEmail,
+    sendExpiryReminderEmail,
+    sendExpiredNoticeEmail,
+} from '../../utils/mailer.js';
 import checkinService from '../device/checkin.service.js';
 import commandQueue from '../device/device-command-queue.service.js';
 import env from '../../config/env.js';
@@ -106,7 +111,7 @@ async function latestFeesFor(memberIds) {
         where: { memberId: { in: memberIds } },
         distinct: ['memberId'],
         orderBy: [{ memberId: 'asc' }, { createdAt: 'desc' }],
-        select: { memberId: true, status: true, amount: true },
+        select: { memberId: true, status: true, amount: true, id: true },
     });
     return new Map(rows.map((r) => [r.memberId, r]));
 }
@@ -269,10 +274,10 @@ const listMembers = asyncHandler(async (req, res) => {
     const [todayRows, days, fees, holidays] = await Promise.all([
         pageIds.length
             ? prisma.attendance.findMany({
-                  where: { memberId: { in: pageIds }, checkInAt: { gte: today } },
-                  distinct: ['memberId'],
-                  select: { memberId: true },
-              })
+                where: { memberId: { in: pageIds }, checkInAt: { gte: today } },
+                distinct: ['memberId'],
+                select: { memberId: true },
+            })
             : [],
         attendanceDaysFor(pageIds, windowStart),
         latestFeesFor(pageIds),
@@ -300,6 +305,7 @@ const listMembers = asyncHandler(async (req, res) => {
             checkedInToday: checkedInSet.has(u.id),
             workoutStreak: computeStreak(days.get(u.id) || new Set(), today, isOffDay),
             feeStatus: mapFeeStatus(latestFee?.status),
+            lastFee: latestFee?.id,
             amount: Number(latestFee?.amount || 0),
         };
     });
@@ -965,8 +971,8 @@ const updateMember = asyncHandler(async (req, res) => {
     });
 
     if (profileImageUrl !== undefined && member.profileImageUrl && member.profileImageUrl !== profileImageUrl) {
-    deleteProfileImage(member.profileImageUrl); // best effort, errors are logged inside
-}
+        deleteProfileImage(member.profileImageUrl); // best effort, errors are logged inside
+    }
 
     // Keep the biometric device's display name in sync
     if (name && name.trim() !== member.name && updated.deviceSN && updated.devicePin) {
@@ -1021,62 +1027,67 @@ const deleteMember = asyncHandler(async (req, res) => {
     }
 
     // ── Hard delete ──────────────────────────────────────────────────────────
+    const result = await hardDeleteUser(id);
+    if (!result.ok) {
+        return fail(req, res, result.status, result.message, result.code, 'Cannot permanently delete', result.message);
+    }
+    return res.json({ member: { id }, message: 'Member deleted successfully!', warnings: result.warnings });
     // These tables have a REQUIRED FK to User (authored by staff/admin), so they
     // can't be nulled or safely cascaded. Block instead of destroying shared content.
-    const [plans, announcements, documents] = await Promise.all([
-        prisma.workoutPlan.count({ where: { createdById: id } }),
-        prisma.announcement.count({ where: { createdById: id } }),
-        prisma.document.count({ where: { uploadedById: id } }),
-    ]);
-    if (plans || announcements || documents) {
-        return fail(
-            req, res, 409,
-            'Member owns content',
-            'MEMBER_HAS_AUTHORED_CONTENT',
-            'Cannot permanently delete',
-            `This user authored ${plans} workout plan(s), ${announcements} announcement(s) and ${documents} document(s). Reassign or delete them first, or de-activate the user instead.`
-        );
-    }
+    // const [plans, announcements, documents] = await Promise.all([
+    //     prisma.workoutPlan.count({ where: { createdById: id } }),
+    //     prisma.announcement.count({ where: { createdById: id } }),
+    //     prisma.document.count({ where: { uploadedById: id } }),
+    // ]);
+    // if (plans || announcements || documents) {
+    //     return fail(
+    //         req, res, 409,
+    //         'Member owns content',
+    //         'MEMBER_HAS_AUTHORED_CONTENT',
+    //         'Cannot permanently delete',
+    //         `This user authored ${plans} workout plan(s), ${announcements} announcement(s) and ${documents} document(s). Reassign or delete them first, or de-activate the user instead.`
+    //     );
+    // }
 
-    if (member.devicePin && member.deviceSN) {
-        await checkinService.blockUserHard(member.deviceSN, member.devicePin);
-    }
+    // if (member.devicePin && member.deviceSN) {
+    //     await checkinService.blockUserHard(member.deviceSN, member.devicePin);
+    // }
 
-    try {
-        await prisma.$transaction([
-            // Optional FKs pointing at this user: detach so the delete can't be blocked
-            prisma.user.updateMany({ where: { assignedTrainerId: id }, data: { assignedTrainerId: null } }),
-            prisma.user.updateMany({ where: { referredById: id }, data: { referredById: null } }),
-            prisma.feeRecord.updateMany({ where: { approvedById: id }, data: { approvedById: null } }),
-            prisma.productOrder.updateMany({ where: { processedById: id }, data: { processedById: null } }),
-            prisma.deviceCheckInEvent.updateMany({ where: { memberId: id }, data: { memberId: null } }), // keep door audit log
+    // try {
+    //     await prisma.$transaction([
+    //         // Optional FKs pointing at this user: detach so the delete can't be blocked
+    //         prisma.user.updateMany({ where: { assignedTrainerId: id }, data: { assignedTrainerId: null } }),
+    //         prisma.user.updateMany({ where: { referredById: id }, data: { referredById: null } }),
+    //         prisma.feeRecord.updateMany({ where: { approvedById: id }, data: { approvedById: null } }),
+    //         prisma.productOrder.updateMany({ where: { processedById: id }, data: { processedById: null } }),
+    //         prisma.deviceCheckInEvent.updateMany({ where: { memberId: id }, data: { memberId: null } }), // keep door audit log
 
-            // Required FKs (default onDelete = Restrict): must be removed first.
-            // FeeReminder and OrderItem are removed via their onDelete: Cascade.
-            prisma.userOffer.deleteMany({ where: { userId: id } }),
-            prisma.feeRecord.deleteMany({ where: { memberId: id } }),
-            prisma.productOrder.deleteMany({ where: { memberId: id } }),
-            prisma.workoutAssignment.deleteMany({ where: { memberId: id } }),
-            prisma.bodyMeasurement.deleteMany({ where: { memberId: id } }),
-            prisma.classBooking.deleteMany({ where: { memberId: id } }),
-            prisma.equipmentBooking.deleteMany({ where: { memberId: id } }),
-            prisma.feedback.deleteMany({ where: { memberId: id } }),
-            prisma.userBadge.deleteMany({ where: { userId: id } }),
-            prisma.notification.deleteMany({ where: { userId: id } }),
-            prisma.attendance.deleteMany({ where: { memberId: id } }),
+    //         // Required FKs (default onDelete = Restrict): must be removed first.
+    //         // FeeReminder and OrderItem are removed via their onDelete: Cascade.
+    //         prisma.userOffer.deleteMany({ where: { userId: id } }),
+    //         prisma.feeRecord.deleteMany({ where: { memberId: id } }),
+    //         prisma.productOrder.deleteMany({ where: { memberId: id } }),
+    //         prisma.workoutAssignment.deleteMany({ where: { memberId: id } }),
+    //         prisma.bodyMeasurement.deleteMany({ where: { memberId: id } }),
+    //         prisma.classBooking.deleteMany({ where: { memberId: id } }),
+    //         prisma.equipmentBooking.deleteMany({ where: { memberId: id } }),
+    //         prisma.feedback.deleteMany({ where: { memberId: id } }),
+    //         prisma.userBadge.deleteMany({ where: { userId: id } }),
+    //         prisma.notification.deleteMany({ where: { userId: id } }),
+    //         prisma.attendance.deleteMany({ where: { memberId: id } }),
 
-            // RotationToken is onDelete: Cascade, so it goes with the user
-            prisma.user.delete({ where: { id } }),
-        ]);
-        await deleteProfileImage(member.profileImageUrl);
-    } catch (err) {
-        if (err.code === 'P2003') {
-            return fail(req, res, 409, 'Member is still referenced', 'MEMBER_DELETE_CONSTRAINT', 'Cannot permanently delete', 'Other records still reference this member. De-activate the user instead.');
-        }
-        throw err;
-    }
+    //         // RotationToken is onDelete: Cascade, so it goes with the user
+    //         prisma.user.delete({ where: { id } }),
+    //     ]);
+    //     await deleteProfileImage(member.profileImageUrl);
+    // } catch (err) {
+    //     if (err.code === 'P2003') {
+    //         return fail(req, res, 409, 'Member is still referenced', 'MEMBER_DELETE_CONSTRAINT', 'Cannot permanently delete', 'Other records still reference this member. De-activate the user instead.');
+    //     }
+    //     throw err;
+    // }
 
-    return res.json({ member: { id }, message: 'Member deleted successfully!' });
+    // return res.json({ member: { id }, message: 'Member deleted successfully!' });
 });
 
 const addDays = (date, days) => {
@@ -1473,6 +1484,45 @@ const revertLastRenewal = asyncHandler(async (req, res) => {
     });
 });
 
+// ── POST /api/v1/admin/members/:id/remind ───────────────────────────────────
+// Manually sends a membership email:
+//  - membership still running (expires sooner or later) -> expiry reminder
+//  - membership already ended                           -> expired / overdue notice
+const sendReminder = asyncHandler(async (req, res) => {
+    const { id } = req.params;
+
+    const member = await prisma.user.findUnique({
+        where: { id },
+        include: { membershipPlan: true }, // the mail builders read member.membershipPlan.name / price
+    });
+
+    if (!member || member.role !== 'MEMBER') {
+        return fail(req, res, 404, 'Member not found', 'MEMBER_NOT_FOUND', 'Member not found', 'No member exists with this id.');
+    }
+    if (!member.email) {
+        return fail(req, res, 400, 'No email on file', 'NO_EMAIL', 'Cannot send reminder', 'This member has no email address.');
+    }
+    if (!member.membershipEnd || !member.membershipPlan) {
+        return fail(req, res, 400, 'No active membership', 'NO_MEMBERSHIP', 'Cannot send reminder', 'This member has no membership plan or expiry date.');
+    }
+
+    const now = new Date();
+    const expired = member.membershipEnd < now;
+
+    if (expired) {
+        await sendExpiredNoticeEmail(member, now, { automatic: false });
+    } else {
+        await sendExpiryReminderEmail(member, now, { automatic: false });
+    }
+
+    res.json({
+        type: expired ? 'EXPIRED' : 'EXPIRING',
+        message: expired
+            ? `Expired notice sent to ${member.name}.`
+            : `Expiry reminder sent to ${member.name}.`,
+    });
+});
+
 export default {
     listMembers,
     getMemberDetails,
@@ -1488,5 +1538,6 @@ export default {
     deleteMember,
     renewMembership,
     revertLastRenewal,
-    applyDueRenewals
+    applyDueRenewals,
+    sendReminder,
 };

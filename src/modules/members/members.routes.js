@@ -22,5 +22,6 @@ router.delete('/:id', memberController.deleteMember);
 router.patch('/:id/suspend', memberController.suspendMember);
 router.post('/:id/renew', uploadReceipt, cleanupOnError, memberController.renewMembership);
 router.delete('/:id/renew/revert-last', memberController.revertLastRenewal);
+router.post('/:id/send-reminder', memberController.sendReminder);
 
 export default router;
