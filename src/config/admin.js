@@ -1049,15 +1049,17 @@ const adminRouter = AdminJSExpress.buildAuthenticatedRouter(
 export default async (app) => {
   if (env.NODE_ENV === 'production') {
     await admin.initialize(); // bundles custom components once at startup
-    // Serve the custom components bundle directly (absolute path, no cwd guessing)
     const bundleFile = path.resolve(process.cwd(), '.adminjs', 'bundle.js');
+
     app.get(`${admin.options.rootPath}/frontend/assets/components.bundle.js`, (req, res) => {
-      if (!fs.existsSync(bundleFile)) {
-        console.error('components bundle missing at', bundleFile);
-        return res.status(404).send('// bundle missing');
+      try {
+        const js = fs.readFileSync(bundleFile, 'utf8');
+        res.set('Cache-Control', 'no-store');
+        res.type('application/javascript').send(js);
+      } catch (err) {
+        console.error('components bundle read failed:', bundleFile, err);
+        res.status(500).type('application/javascript').send(`// bundle read failed: ${err.message}`);
       }
-      res.set('Cache-Control', 'no-store');
-      res.type('application/javascript').sendFile(bundleFile);
     });
   } else {
     await admin.watch(); // bundles and rebuilds on change
