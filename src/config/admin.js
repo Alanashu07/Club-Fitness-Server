@@ -18,6 +18,7 @@ import prisma from './db.js';
 import env from './env.js';
 import checkinService from '../modules/device/checkin.service.js';
 import commandQueue from '../modules/device/device-command-queue.service.js';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { getDeletionImpact, hardDeleteUser } from '../utils/member-delete.js';
