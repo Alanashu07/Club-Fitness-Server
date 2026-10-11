@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#0A0A0A">
+    <meta http-equiv="refresh" content="0; url={{APP_DEEP_LINK}}">
+    <title>Opening {{APP_NAME}}...</title>
+    <style>
+        :root {
+            /* Match these to AppTheme in Flutter */
+            --background: #0A0A0A;
+            --card: #1A1A1A;
+            --primary: #E53935;
+            --primary-dark: #8B0000;
+            --primary-light: #FF6B6B;
+            --text-secondary: #9E9E9E;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            height: 100%;
+        }
+
+        body {
+            font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: var(--background);
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* Decorative grid */
+        .grid {
+            position: absolute;
+            inset: 0;
+            background-image:
+                linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+            background-size: 44px 44px;
+            pointer-events: none;
+        }
+
+        /* Pulsing radial glow */
+        .glow {
+            position: absolute;
+            top: 18%;
+            left: 50%;
+            width: 360px;
+            height: 360px;
+            margin-left: -180px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(229, 57, 53, 0.18) 0%, rgba(229, 57, 53, 0.06) 50%, transparent 100%);
+            animation: pulse 3.2s ease-in-out infinite alternate;
+            pointer-events: none;
+        }
+
+        @keyframes pulse {
+            from {
+                transform: scale(0.85);
+            }
+
+            to {
+                transform: scale(1.15);
+            }
+        }
+
+        /* Top accent line */
+        .accent {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, transparent, var(--primary), transparent);
+        }
+
+        .content {
+            position: relative;
+            z-index: 1;
+            width: 100%;
+            max-width: 420px;
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            animation: enter 0.9s cubic-bezier(0.22, 1, 0.36, 1) both;
+        }
+
+        @keyframes enter {
+            from {
+                opacity: 0;
+                transform: translateY(14px) scale(0.96);
+            }
+
+            to {
+                opacity: 1;
+                transform: none;
+            }
+        }
+
+        /* Logo with rings */
+        .logo-wrap {
+            position: relative;
+            width: 148px;
+            height: 148px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 32px;
+        }
+
+        .ring {
+            position: absolute;
+            border-radius: 50%;
+            border: 1px solid;
+        }
+
+        .ring.outer {
+            width: 148px;
+            height: 148px;
+            border-color: rgba(229, 57, 53, 0.15);
+        }
+
+        .ring.middle {
+            width: 124px;
+            height: 124px;
+            border-color: rgba(229, 57, 53, 0.25);
+        }
+
+        .logo {
+            width: 104px;
+            height: 104px;
+            border-radius: 50%;
+            background-color: var(--card);
+            border: 2px solid rgba(229, 57, 53, 0.5);
+            box-shadow: 0 0 28px 2px rgba(229, 57, 53, 0.35), 0 6px 16px rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+
+        .logo img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+
+        .logo-fallback {
+            font-size: 44px;
+            font-weight: 900;
+            color: var(--primary);
+        }
+
+        /* Brand text */
+        .brand-club {
+            color: rgba(255, 255, 255, 0.55);
+            font-size: 22px;
+            font-weight: 300;
+            letter-spacing: 14px;
+            margin-right: -14px;
+            /* offset trailing letter-spacing so text stays centered */
+        }
+
+        .brand-fitness {
+            color: var(--primary);
+            font-size: 38px;
+            font-weight: 900;
+            letter-spacing: 10px;
+            margin-right: -10px;
+            line-height: 0.95;
+        }
+
+        .tagline {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 14px;
+            color: var(--text-secondary);
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 4px;
+        }
+
+        .dot {
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+            background: var(--primary);
+        }
+
+        /* States */
+        .status {
+            width: 100%;
+            margin-top: 48px;
+        }
+
+        #message {
+            display: none;
+        }
+
+        .status h1 {
+            font-size: 20px;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+
+        .status p {
+            color: var(--text-secondary);
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        /* Loading bar */
+        .bar-track {
+            height: 2px;
+            margin: 28px 0 0;
+            border-radius: 2px;
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        .bar-fill {
+            height: 100%;
+            width: 0;
+            border-radius: 2px;
+            background: linear-gradient(90deg, var(--primary-dark), var(--primary), var(--primary-light));
+            box-shadow: 0 0 6px 1px rgba(229, 57, 53, 0.6);
+            animation: fill 5s ease-in-out forwards;
+        }
+
+        @keyframes fill {
+            to {
+                width: 100%;
+            }
+        }
+
+        /* Buttons */
+        .actions {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin-top: 28px;
+        }
+
+        .button {
+            display: block;
+            padding: 15px 24px;
+            border-radius: 14px;
+            font-size: 15px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            text-decoration: none;
+            transition: transform 0.15s ease, box-shadow 0.15s ease;
+        }
+
+        .button.primary {
+            color: #fff;
+            background: var(--primary);
+            box-shadow: 0 8px 24px rgba(229, 57, 53, 0.35);
+        }
+
+        .button.secondary {
+            color: #fff;
+            background: transparent;
+            border: 1px solid rgba(229, 57, 53, 0.5);
+        }
+
+        .button:hover {
+            transform: translateY(-2px);
+        }
+
+        .button:active {
+            transform: translateY(0);
+        }
+
+        .button:focus-visible {
+            outline: 2px solid var(--primary-light);
+            outline-offset: 3px;
+        }
+
+        .footer {
+            position: absolute;
+            bottom: 28px;
+            left: 0;
+            right: 0;
+            text-align: center;
+            color: rgba(255, 255, 255, 0.2);
+            font-size: 11px;
+            letter-spacing: 1.5px;
+        }
+
+        #deeplink-iframe {
+            display: none;
+        }
+
+        @media (max-width: 380px) {
+            .brand-fitness {
+                font-size: 32px;
+            }
+
+            .brand-club {
+                font-size: 18px;
+                letter-spacing: 11px;
+                margin-right: -11px;
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+
+            .glow,
+            .content {
+                animation: none;
+            }
+
+            .bar-fill {
+                animation-duration: 0.01s;
+            }
+        }
+    </style>
+</head>
+
+<body data-deeplink="{{APP_DEEP_LINK}}">
+    <iframe id="deeplink-iframe" title=""></iframe>
+
+    <div class="grid"></div>
+    <div class="glow"></div>
+    <div class="accent"></div>
+
+    <main class="content">
+        <div class="logo-wrap">
+            <div class="ring outer"></div>
+            <div class="ring middle"></div>
+            <div class="logo">
+                <img src="{{LOGO_URL}}" alt="" id="logo-img">
+                <span class="logo-fallback" id="logo-fallback" hidden>C</span>
+            </div>
+        </div>
+
+        <div class="brand-club">CLUB</div>
+        <div class="brand-fitness">FITNESS</div>
+        <div class="tagline">
+            <span class="dot"></span>
+            <span>YOUR GYM. YOUR WAY.</span>
+            <span class="dot"></span>
+        </div>
+
+        <section class="status" id="loading" aria-live="polite">
+            <h1>Opening {{APP_NAME}}...</h1>
+            <p>Please wait while we take you to the app.</p>
+            <div class="bar-track">
+                <div class="bar-fill"></div>
+            </div>
+        </section>
+
+        <section class="status" id="message">
+            <h1>App didn't open?</h1>
+            <p>You may need to install {{APP_NAME}} first, or try opening it again.</p>
+            <div class="actions">
+                <a href="{{FALLBACK_URL}}" class="button primary">Download {{APP_NAME}}</a>
+                <a href="{{APP_DEEP_LINK}}" class="button secondary">Try again</a>
+            </div>
+        </section>
+    </main>
+
+    <div class="footer">Powered by Club Fitness</div>
+
+    <script>
+        (function () {
+            // Read from the attribute so server-side HTML escaping stays safe
+            var appDeepLink = document.body.getAttribute('data-deeplink');
+            var appOpened = false;
+
+            // Logo fallback if the image fails to load
+            var logo = document.getElementById('logo-img');
+            logo.addEventListener('error', function () {
+                logo.hidden = true;
+                document.getElementById('logo-fallback').hidden = false;
+            });
+
+            document.addEventListener('visibilitychange', function () {
+                if (document.hidden) appOpened = true;
+            });
+
+            window.addEventListener('blur', function () {
+                appOpened = true;
+            });
+
+            document.getElementById('deeplink-iframe').src = appDeepLink;
+
+            setTimeout(function () {
+                if (!appOpened) {
+                    document.getElementById('loading').style.display = 'none';
+                    document.getElementById('message').style.display = 'block';
+                }
+            }, 5000);
+        })();
+    </script>
+</body>
+
+</html>
