@@ -50,8 +50,6 @@ export default {
 
   MSG91_TEMPLATE_ID: process.env.MSG91_TEMPLATE_ID,
 
-  FCM_SERVER_KEY: process.env.FCM_SERVER_KEY,
-
   WHATSAPP_API_TOKEN: process.env.WHATSAPP_API_TOKEN,
 
   SMS_API_KEY: process.env.SMS_API_KEY,

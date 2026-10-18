@@ -10,7 +10,7 @@ import env from '../config/env.js';
 // ============================================================================
 
 const PROVIDERS_CONFIGURED = {
-    push: Boolean(env.FCM_SERVER_KEY),
+    push: Boolean(env.FIREBASE_SERVICE_ACCOUNT),
     whatsapp: Boolean(env.WHATSAPP_API_TOKEN),
     sms: Boolean(env.SMS_API_KEY),
 };

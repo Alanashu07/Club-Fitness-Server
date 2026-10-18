@@ -44,8 +44,10 @@ export const registerApiRoutes = async (app) => {
     const { default: deviceRoutes } = await import('./modules/device/device.routes.js');
     const { default: offerRoutes } = await import('./modules/offer/offer.routes.js');
     const { default: deepLinkRoutes } = await import('./modules/deep_link/deep_link.routes.js');
+    const { default: coreRoutes } = await import('./modules/core/core.routes.js');
 
     // API Routes
+    app.use(`/`, coreRoutes);
     app.use(`/`, deviceRoutes);
     app.use(`/app`, deepLinkRoutes);
     app.use(`${API_PREFIX}/auth`, authRoutes);

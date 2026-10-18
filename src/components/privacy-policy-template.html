@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>Privacy Policy – ClubFitness</title>
+    <style>
+        :root {
+            --primary: #C41E2D;
+            --background: #0A0A0A;
+            --surface: #1A1A1A;
+            --card: #222222;
+            --border: #333333;
+            --text: #FFFFFF;
+            --text-secondary: #B0B0B0;
+            color-scheme: dark;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            background: var(--background);
+            color: var(--text);
+            font-family: Roboto, "Segoe UI", Helvetica, Arial, sans-serif;
+            line-height: 1.7;
+        }
+
+        header {
+            background: var(--surface);
+            border-bottom: 3px solid var(--primary);
+            padding: 36px 20px 32px;
+            text-align: center;
+        }
+
+        .logo {
+            display: block;
+            max-width: 160px;
+            max-height: 100px;
+            width: auto;
+            height: auto;
+            margin: 0 auto 18px;
+        }
+
+        .brand {
+            margin: 0 0 14px;
+            font-size: 1.4rem;
+            font-weight: 800;
+            letter-spacing: 1px;
+        }
+
+        header h1 {
+            margin: 0 0 6px;
+            font-size: 2rem;
+            font-weight: 800;
+            letter-spacing: 0.5px;
+        }
+
+        header p {
+            margin: 0;
+            color: var(--text-secondary);
+        }
+
+        .wrap {
+            max-width: 760px;
+            margin: 0 auto;
+        }
+
+        main {
+            padding: 28px 16px 56px;
+        }
+
+        .card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 18px;
+            padding: 24px 26px;
+            margin-bottom: 16px;
+        }
+
+        h2 {
+            margin: 0 0 12px;
+            padding-left: 12px;
+            border-left: 4px solid var(--primary);
+            font-size: 1.15rem;
+            font-weight: 700;
+            line-height: 1.3;
+        }
+
+        p {
+            margin: 0 0 12px;
+            color: var(--text-secondary);
+        }
+
+        strong {
+            color: var(--text);
+        }
+
+        ul {
+            margin: 0 0 12px;
+            padding-left: 22px;
+            color: var(--text-secondary);
+        }
+
+        li {
+            margin-bottom: 4px;
+        }
+
+        li::marker {
+            color: var(--primary);
+        }
+
+        a {
+            color: var(--text);
+            text-decoration-color: var(--primary);
+            text-decoration-thickness: 2px;
+            text-underline-offset: 3px;
+        }
+
+        a:focus-visible {
+            outline: 2px solid var(--primary);
+            outline-offset: 3px;
+            border-radius: 4px;
+        }
+
+        .note {
+            font-size: .92rem;
+        }
+
+        footer {
+            text-align: center;
+            padding: 0 20px 40px;
+            color: var(--text-secondary);
+            font-size: .88rem;
+        }
+
+        @media (max-width: 480px) {
+            .card {
+                padding: 20px 18px;
+            }
+
+            header h1 {
+                font-size: 1.6rem;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <header>
+        <!--
+    Mustache template variables:
+      {{logo}}  – URL (or data URI) of the logo image
+    If {{logo}} is empty or not provided, the text name is shown instead.
+  -->
+        {{#LOGO_URL}}
+        <img class="logo" src="{{LOGO_URL}}" alt="ClubFitness logo">
+        {{/LOGO_URL}}
+        {{^LOGO_URL}}
+        <div class="brand">CLUBFITNESS</div>
+        {{/LOGO_URL}}
+        <h1>Privacy Policy</h1>
+        <p>Last updated: 18 October 2026</p>
+    </header>
+
+    <main>
+        <div class="wrap">
+
+            <section class="card">
+                <h2>Introduction</h2>
+                <p>Welcome to ClubFitness ("we", "our", "us"). This Privacy Policy explains how we collect, use, and
+                    protect your information when you use the ClubFitness mobile application (the "App") and related gym
+                    services.</p>
+                <p>By using the App, you agree to the practices described in this policy. If you do not agree, please do
+                    not use the App.</p>
+            </section>
+
+            <section class="card">
+                <h2>Information We Collect</h2>
+                <p><strong>Information you provide:</strong></p>
+                <ul>
+                    <li>Name, email address, phone number, and password</li>
+                    <li>Date of birth, gender, height, and weight</li>
+                    <li>Membership plan, payment status, and billing details</li>
+                    <li>Profile photo (optional)</li>
+                    <li>Emergency contact details (optional)</li>
+                </ul>
+                <p><strong>Information collected through use of the App:</strong></p>
+                <ul>
+                    <li>Workout plans, attendance, class bookings, and check-in history</li>
+                    <li>Fitness goals and progress data (for example, body measurements and personal records)</li>
+                    <li>Device information such as model, operating system, and app version</li>
+                    <li>Notification tokens used to send you alerts</li>
+                    <li>Crash reports and usage analytics</li>
+                </ul>
+            </section>
+
+            <section class="card">
+                <h2>How We Use Your Information</h2>
+                <ul>
+                    <li>To create and manage your account and membership</li>
+                    <li>To book classes, track attendance, and manage trainer sessions</li>
+                    <li>To personalize workout and progress tracking</li>
+                    <li>To process payments and send payment reminders and receipts</li>
+                    <li>To send important notices such as membership expiry, schedule changes, and offers you have opted
+                        into</li>
+                    <li>To improve the App, fix bugs, and keep it secure</li>
+                    <li>To comply with legal obligations</li>
+                </ul>
+            </section>
+
+            <section class="card">
+                <h2>Health and Fitness Data</h2>
+                <p>Some information you share, such as weight, body measurements, and fitness goals, may be considered
+                    health-related. We use it only to provide fitness tracking and training features. We do not sell
+                    your health data or use it for advertising.</p>
+            </section>
+
+            <section class="card">
+                <h2>Permissions the App May Request</h2>
+                <ul>
+                    <li><strong>Camera / Photos:</strong> to set a profile picture or scan a QR code for gym check-in
+                    </li>
+                    <li><strong>Notifications:</strong> to send reminders, class updates, and announcements</li>
+                    <li><strong>Location (optional):</strong> to confirm gym check-in or find nearby branches</li>
+                    <li><strong>Storage:</strong> to save invoices or progress images on your device</li>
+                </ul>
+                <p class="note">You can change these permissions at any time in your device settings.</p>
+            </section>
+
+            <section class="card">
+                <h2>Sharing of Information</h2>
+                <p>We do not sell your personal information. We may share it only in these cases:</p>
+                <ul>
+                    <li><strong>Service providers:</strong> such as payment gateways, cloud hosting, analytics, and
+                        messaging services, who process data on our behalf</li>
+                    <li><strong>Gym staff and trainers:</strong> limited details needed to manage your membership and
+                        training</li>
+                    <li><strong>Legal reasons:</strong> when required by law, court order, or to protect our rights and
+                        safety</li>
+                    <li><strong>Business transfers:</strong> in the event of a merger, acquisition, or sale of assets
+                    </li>
+                </ul>
+            </section>
+
+            <section class="card">
+                <h2>Data Security</h2>
+                <p>We use reasonable technical and organizational measures, including encrypted connections and
+                    restricted access, to protect your data. However, no method of transmission or storage is completely
+                    secure, and we cannot guarantee absolute security.</p>
+            </section>
+
+            <section class="card">
+                <h2>Data Retention</h2>
+                <p>We keep your information for as long as your account is active or as needed to provide our services.
+                    After you close your account, we delete or anonymize your data within a reasonable period, except
+                    where we must keep it for legal, tax, or accounting purposes.</p>
+            </section>
+
+            <section class="card">
+                <h2>Your Rights and Choices</h2>
+                <ul>
+                    <li>Access and update your personal information in the App</li>
+                    <li>Request a copy of the data we hold about you</li>
+                    <li>Request correction or deletion of your account and data</li>
+                    <li>Opt out of promotional notifications at any time</li>
+                    <li>Withdraw consent for optional permissions such as location</li>
+                </ul>
+                <p>To make a request, contact us using the details below.</p>
+            </section>
+
+            <section class="card">
+                <h2>Children's Privacy</h2>
+                <p>The App is not intended for children under 13. Users under 18 should use the App with the consent of
+                    a parent or guardian. We do not knowingly collect personal information from children under 13. If
+                    you believe a child has provided us data, please contact us and we will delete it.</p>
+            </section>
+
+            <section class="card">
+                <h2>Third-Party Services</h2>
+                <p>The App may use third-party services such as Google Play Services, Firebase, and payment providers.
+                    These services have their own privacy policies, and we encourage you to review them.</p>
+            </section>
+
+            <section class="card">
+                <h2>Changes to This Policy</h2>
+                <p>We may update this Privacy Policy from time to time. When we do, we will change the "Last updated"
+                    date above and, for significant changes, notify you in the App.</p>
+            </section>
+
+            <section class="card">
+                <h2>Contact Us</h2>
+                <p>If you have questions or requests about this Privacy Policy, contact us at:</p>
+                <p>
+                    <strong>{{APP_NAME}}</strong><br>
+                    {{#SUPPORT_EMAIL}}Email: <a
+                        href="mailto:{{SUPPORT_EMAIL}}">{{SUPPORT_EMAIL}}</a><br>{{/SUPPORT_EMAIL}}
+                    {{#SUPPORT_PHONE}}Phone: {{SUPPORT_PHONE}}<br>{{/SUPPORT_PHONE}}
+                    {{#ADDRESS}}Address: {{ADDRESS}}{{/ADDRESS}}
+                </p>
+            </section>
+
+        </div>
+    </main>
+
+    <footer>&copy; 2026 ClubFitness. All rights reserved.</footer>
+
+</body>
+
+</html>
