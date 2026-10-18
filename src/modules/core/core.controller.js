@@ -34,6 +34,7 @@ const privacyPolicy = async (req, res, next) => {
       APP_DEEP_LINK: appDeepLink, 
       FALLBACK_URL: req.headers['user-agent']?.includes('iPhone') ? env.APP_STORE_URL || 'https://www.google.com' : env.PLAY_STORE_URL || 'https://www.google.com', 
       LOGO_URL: env.LOGO_URL,
+      FAVICON_URL: '/media/favicon.ico',
       SUPPORT_EMAIL: env.SUPPORT_EMAIL,
       SUPPORT_PHONE: env.SUPPORT_PHONE,
       ADDRESS: env.GYM_ADDRESS,

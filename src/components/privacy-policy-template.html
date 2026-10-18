@@ -5,7 +5,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="dark">
-    <title>Privacy Policy – ClubFitness</title>
+    <title>Privacy Policy – {{APP_NAME}}</title>
+    {{#FAVICON_URL}}
+    <link rel="icon" href="{{FAVICON_URL}}">
+    <link rel="apple-touch-icon" href="{{FAVICON_URL}}">
+    {{/FAVICON_URL}}
     <style>
         :root {
             --primary: #C41E2D;
@@ -153,16 +157,12 @@
 <body>
 
     <header>
-        <!--
-    Mustache template variables:
-      {{logo}}  – URL (or data URI) of the logo image
-    If {{logo}} is empty or not provided, the text name is shown instead.
-  -->
+        {{! If LOGO_URL is empty or missing, the app name is shown as text instead. }}
         {{#LOGO_URL}}
-        <img class="logo" src="{{LOGO_URL}}" alt="ClubFitness logo">
+        <img class="logo" src="{{LOGO_URL}}" alt="{{APP_NAME}} logo">
         {{/LOGO_URL}}
         {{^LOGO_URL}}
-        <div class="brand">CLUBFITNESS</div>
+        <div class="brand">{{APP_NAME}}</div>
         {{/LOGO_URL}}
         <h1>Privacy Policy</h1>
         <p>Last updated: 18 October 2026</p>
