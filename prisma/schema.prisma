@@ -155,12 +155,13 @@ model User {
   referredBy   User?   @relation("Referrals", fields: [referredById], references: [id])
   referrals    User[]  @relation("Referrals")
 
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-  devicePin        Int?     @unique // numeric PIN enrolled on the device
-  deviceSN         String? // which device this member is enrolled on
-  blocked          Boolean  @default(false)
-  graceEntriesUsed Int      @default(0)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  devicePin           Int?      @unique // numeric PIN enrolled on the device
+  deviceSN            String? // which device this member is enrolled on
+  blocked             Boolean   @default(false)
+  graceEntriesUsed    Int       @default(0)
+  deletionRequestedAt DateTime?
 
   // ── Relations ───────────────────────────────────────────────────────────
   feeRecords           FeeRecord[]          @relation("MemberFees")
@@ -182,6 +183,7 @@ model User {
   rotationTokens       RotationToken[]
   offerRedemptions     UserOffer[]
 
+  @@index([deletionRequestedAt])
   @@index([role])
   @@index([status])
   @@index([membershipPlanId])

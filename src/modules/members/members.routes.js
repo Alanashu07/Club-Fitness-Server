@@ -6,7 +6,10 @@ import { uploadReceipt, uploadProfileImage, cleanupOnError } from '../../config/
 
 const router = express.Router();
 
-router.use(authenticate, authorize('ADMIN', 'STAFF'));
+router.use(authenticate);
+router.delete('/account/delete', memberController.requestAccountDeletion);
+
+router.use(authorize('ADMIN', 'STAFF'));
 
 router.get('/', memberController.listMembers);
 router.post('/', uploadProfileImage, cleanupOnError, validateCreateMemberInput, memberController.createMember);
