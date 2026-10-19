@@ -7,6 +7,5 @@ dist/
 build/
 media/
 coverage/
-prisma/migrations/
 *.log
 "@ | Out-File -Encoding utf8 .gitignore
