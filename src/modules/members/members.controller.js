@@ -1485,7 +1485,7 @@ const revertLastRenewal = asyncHandler(async (req, res) => {
     });
 });
 
-// ── POST /api/v1/admin/members/:id/remind ───────────────────────────────────
+// ── POST /api/v1/members/:id/send-reminder ───────────────────────────────────
 // Manually sends a membership email:
 //  - membership still running (expires sooner or later) -> expiry reminder
 //  - membership already ended                           -> expired / overdue notice

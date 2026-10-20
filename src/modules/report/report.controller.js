@@ -364,10 +364,11 @@ const exportSalesPdf = async function (req, res, next) {
     const { kpis } = data;
 
     const doc = createPdf(res, 'sales-report.pdf');
+    const generatedAt = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric' });
 
     drawTitleBand(doc, {
       title: 'Sales Report',
-      subtitle: `${data.rangeLabel}  ·  Generated ${new Date().toLocaleString('en-IN')}`,
+      subtitle: `${data.rangeLabel}  ·  Generated ${generatedAt}`,
     });
 
     drawSectionTitle(doc, 'Summary');

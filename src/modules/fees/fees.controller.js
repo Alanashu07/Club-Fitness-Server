@@ -759,10 +759,11 @@ const exportFeesPdf = asyncHandler(async (req, res) => {
 
     const doc = new PDFDocument({ size: 'A4', margin: PAGE_MARGIN, bufferPages: true });
     doc.pipe(res);
+    const generatedAt = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric' });
 
     drawTitleBand(doc, {
         title: 'Fee Report',
-        subtitle: `${statusLabel}  ·  Generated ${new Date().toLocaleString('en-IN')}`,
+        subtitle: `${statusLabel}  ·  Generated ${generatedAt}`,
     });
 
     drawSectionTitle(doc, 'Summary');

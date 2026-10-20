@@ -2,7 +2,10 @@ import env from './config/env.js';
 import app, { registerApiRoutes } from './app.js';
 import setupAdmin from './config/admin.js';
 
-const BASE_URL = env.BASE_URL || env.NODE_ENV === 'production' ? 'https://api.clubfitness.co.in' : `http://localhost:${env.PORT}`;
+const BASE_URL = env.BASE_URL ||
+  (env.NODE_ENV === 'production'
+    ? 'https://api.clubfitness.co.in'
+    : `http://localhost:${env.PORT}`);
 
 const main = async () => {
   try {
@@ -30,7 +33,7 @@ const main = async () => {
         console.log(`⚙️  Admin Panel: ${BASE_URL}/admin`);
       }
       console.log(`📊 Health Check: ${BASE_URL}/api/v1/health`);
-      if(env.BASE_URL) {
+      if (env.BASE_URL) {
         console.log('🌐 Public URL: ', env.BASE_URL);
       }
       console.log('\n📍 Available API Endpoints:');

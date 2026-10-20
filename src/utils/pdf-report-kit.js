@@ -18,7 +18,7 @@ export function formatCurrency(value) {
 
 export function formatDate(date) {
   return date
-    ? new Date(date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+    ? new Date(date).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric' })
     : '-';
 }
 

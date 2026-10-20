@@ -69,4 +69,6 @@ export default {
   DEFAULT_DEVICE_GROUP_ID: process.env.DEFAULT_DEVICE_GROUP_ID || '1',
 
   BASE_URL: process.env.BASE_URL,
+
+  GMAIL_SMTP: process.env.GMAIL_SMTP,
 };
