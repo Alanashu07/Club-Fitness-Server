@@ -1231,12 +1231,18 @@ const renewMembership = asyncHandler(async (req, res) => {
     let periodStart;
     if (overrideDate) {
         if (chainEnd && overrideDate < chainEnd) {
+            const readableDate = chainEnd.toLocaleDateString('en-IN', {
+                timeZone: 'Asia/Kolkata',
+                day: '2-digit',
+                month: 'long',
+                year: 'numeric',
+            });
             return fail(
                 req, res, 409,
                 'Start date overlaps',
                 'START_DATE_OVERLAP',
                 'Start date overlaps',
-                `This member is already covered until ${chainEnd.toISOString()}. Choose a start date on or after that.`
+                `This member is already covered until ${readableDate}. Choose a start date on or after that.`
             );
         }
         periodStart = overrideDate;
