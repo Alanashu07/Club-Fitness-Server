@@ -977,9 +977,10 @@ const updateMember = asyncHandler(async (req, res) => {
 
     // Keep the biometric device's display name in sync
     if (name && name.trim() !== member.name && updated.deviceSN && updated.devicePin) {
+        const deviceName = updated.name.replace(/[\t\r\n]+/g, ' ').trim();
         commandQueue.queueCommand(
             updated.deviceSN,
-            `DATA UPDATE USERINFO PIN=${updated.devicePin}\tName=${updated.name}\tPri=0\tCard=0\tGrp=${env.DEFAULT_DEVICE_GROUP_ID}`
+            `DATA UPDATE USERINFO PIN=${updated.devicePin}\tName=${deviceName}`
         ).catch((err) =>
             logger.error('queueCommand failed', { memberId: id, deviceSN: updated.deviceSN, err })
         );
