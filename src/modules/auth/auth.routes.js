@@ -3,7 +3,7 @@ import authController from './auth.controller.js';
 import otpController from './otp.controller.js';
 import googleController from './google.controller.js';
 import { validateLoginInput, validateRegisterInput } from '../../validators/auth.validator.js';
-import { authenticate } from '../../middlewares/auth.middleware.js';
+import { authenticate, authorize } from '../../middlewares/auth.middleware.js';
 
 const router = Router();
 
@@ -14,6 +14,8 @@ router.post('/rotate', authController.rotate);
 router.post('/logout', authController.logout);
 router.post('/logout-all', authenticate, authController.logoutAll);
 router.get('/me', authenticate, authController.me);
+router.get('/admin/profile', authenticate, authorize('ADMIN'), authController.getAdminProfileData);
+router.get('/trainer/profile', authenticate, authorize('STAFF'), authController.getTrainerProfileData);
 
 router.post('/email/otp/request', otpController.requestEmailOtp);
 router.post('/email/otp/verify', otpController.verifyEmailOtp);

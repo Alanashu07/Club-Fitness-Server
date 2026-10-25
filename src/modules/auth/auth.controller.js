@@ -272,22 +272,22 @@ const firebasePhoneLogin = async function (req, res, next) {
         if (!idToken) {
             return res.status(400).json({ error: 'idToken is required', code: 'MISSING_ID_TOKEN' });
         }
- 
+
         let decoded;
         try {
             decoded = await verifyFirebaseIdToken(idToken);
         } catch (err) {
             return res.status(401).json({ error: 'Invalid Firebase token', code: 'INVALID_FIREBASE_TOKEN' });
         }
- 
+
         const phone = decoded.phone_number;
         if (!phone) {
             // Token wasn't issued via phone auth (e.g. someone passed a Google-auth Firebase token here)
             return res.status(400).json({ error: 'Token has no verified phone number', code: 'NO_PHONE_ON_TOKEN' });
         }
- 
+
         let user = await prisma.user.findFirst({ where: { phone } });
- 
+
         if (!user) {
             user = await prisma.user.create({
                 data: {
@@ -301,7 +301,7 @@ const firebasePhoneLogin = async function (req, res, next) {
             if (user.status === 'SUSPENDED') {
                 return res.status(403).json({ error: 'Account suspended', code: 'ACCOUNT_SUSPENDED' });
             }
- 
+
             if (!user.firebaseUid) {
                 user = await prisma.user.update({
                     where: { id: user.id },
@@ -313,14 +313,34 @@ const firebasePhoneLogin = async function (req, res, next) {
                 user = safeUser;
             }
         }
- 
+
         const tokens = generateTokenSet({ id: user.id, role: user.role });
         await persistRotationToken(tokens.rotationToken, user.id);
- 
+
         return res.status(200).json({ user, ...tokens });
     } catch (err) {
         next(err);
     }
+};
+
+const getAdminProfileData = async function (req, res, next) {
+    const members = await prisma.user.count({ where: { role: 'MEMBER' } });
+    const trainers = await prisma.user.count({ where: { role: 'STAFF' } });
+    const templates = await prisma.workoutPlan.count({ where: { isTemplate: true } });
+    return res.json({ members, trainers, templates, user: req.user });
+};
+
+const getTrainerProfileData = async function (req, res, next) {
+    const allClients = await prisma.user.findMany({where: {role: 'MEMBER', assignedTrainerId: req.user.id}});
+    const clients = allClients.length;
+    const activeClients = allClients.filter(client => client.status === 'ACTIVE').length;
+    const trialClients = allClients.filter(client => client.status === 'TRIAL').length;
+    const expiredClients = allClients.filter(client => client.status === 'EXPIRED').length;
+    const suspendedClients = allClients.filter(client => client.status === 'SUSPENDED').length;
+    const clientsByStatus = {active: activeClients, trial: trialClients, expired: expiredClients, suspended: suspendedClients};
+    const bookings = await prisma.classBooking.count({ where: { gymClass: { trainerId: req.user.id } } });
+    const workouts = await prisma.workoutPlan.count({ where: { createdBy: {id: req.user.id} } });
+    return res.json({ clients, bookings, workouts, clientsByStatus, user: req.user });
 };
 
 export default {
@@ -331,5 +351,7 @@ export default {
     me,
     logout,
     logoutAll,
-    firebasePhoneLogin
+    firebasePhoneLogin,
+    getAdminProfileData,
+    getTrainerProfileData,
 };

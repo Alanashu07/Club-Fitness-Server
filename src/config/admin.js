@@ -853,7 +853,7 @@ const admin = new AdminJS({
       resource: { model: getDMMFModelByName('GymClass'), client: prisma, dmmf: Prisma.dmmf },
       options: {
         navigation: { name: 'Facilities & Classes', icon: 'Users' },
-        listProperties: ['id', 'name', 'trainerName', 'dayOfWeek', 'startTime', 'durationMins', 'capacity'],
+        listProperties: ['id', 'name', 'trainerName', 'trainerId', 'dayOfWeek', 'startTime', 'durationMins', 'capacity'],
         filterProperties: ['name', 'trainerName', 'dayOfWeek'],
       },
     },

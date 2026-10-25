@@ -10,6 +10,7 @@ import { runMembershipEmailJobs } from './membership-reminder.js';
 // post-expiry scan — this job is redundant in that mode and exits early.
 
 export const startCronJob = function () {
+    if(env.NODE_ENV !== 'production') return;
     cron.schedule('*/15 * * * *', async () => {
         await expireMemberships();
         const applied = await memberController.applyDueRenewals();

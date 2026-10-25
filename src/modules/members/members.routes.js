@@ -13,7 +13,6 @@ router.use(authorize('ADMIN', 'STAFF'));
 
 router.get('/', memberController.listMembers);
 router.post('/', uploadProfileImage, cleanupOnError, validateCreateMemberInput, memberController.createMember);
-router.get('/trainers', memberController.getAllTrainers);
 router.patch('/:id/reactivate', memberController.reactivateMember);
 router.get('/membership-plans', memberController.getAllMembershipPlans);
 router.post('/membership-plans', memberController.createMembershipPlan);

@@ -38,6 +38,7 @@ export const registerApiRoutes = async (app) => {
     const { default: authRoutes } = await import('./modules/auth/auth.routes.js');
     const { default: homeRoutes } = await import('./modules/home/home.routes.js');
     const { default: membersRoutes } = await import('./modules/members/members.routes.js');
+    const { default: trainersRoutes } = await import('./modules/members/trainers.routes.js');
     const { default: workoutsRoutes } = await import('./modules/workouts/workouts.routes.js');
     const { default: reportRoutes } = await import('./modules/report/report.routes.js');
     const { default: feeRoutes } = await import('./modules/fees/fees.router.js');
@@ -53,6 +54,7 @@ export const registerApiRoutes = async (app) => {
     app.use(`${API_PREFIX}/auth`, authRoutes);
     app.use(`${API_PREFIX}/home`, homeRoutes);
     app.use(`${API_PREFIX}/members`, membersRoutes);
+    app.use(`${API_PREFIX}/trainers`, trainersRoutes);
     app.use(`${API_PREFIX}/workouts`, workoutsRoutes);
     app.use(`${API_PREFIX}/report`, reportRoutes);
     app.use(`${API_PREFIX}/fees`, feeRoutes);

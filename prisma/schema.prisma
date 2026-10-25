@@ -615,14 +615,14 @@ model Facility {
   name        String
   description String?
   imageUrls   String[]
-  openTime    String?        // e.g. "06:00"
-  closeTime   String?        // e.g. "22:00"
+  openTime    String? // e.g. "06:00"
+  closeTime   String? // e.g. "22:00"
   capacity    Int?
   rules       String?
   status      FacilityStatus @default(OPEN)
 
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Equipment {
@@ -635,25 +635,26 @@ model Equipment {
   quantity    Int             @default(1)
   status      EquipmentStatus @default(WORKING)
 
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  bookings    EquipmentBooking[]
+  bookings EquipmentBooking[]
 }
 
 model GymClass {
-  id           String   @id @default(cuid())
-  name         String   // Zumba, Yoga, Spinning...
+  id           String  @id @default(cuid())
+  name         String // Zumba, Yoga, Spinning...
   trainerName  String
+  trainerId    String?
   room         String?
-  dayOfWeek    String   // Mon, Tue, ...
-  startTime    String   // "08:00"
-  durationMins Int      @default(60)
-  capacity     Int      @default(15)
+  dayOfWeek    String // Mon, Tue, ...
+  startTime    String // "08:00"
+  durationMins Int     @default(60)
+  capacity     Int     @default(15)
 
-  createdAt    DateTime @default(now())
+  createdAt DateTime @default(now())
 
-  bookings     ClassBooking[]
+  bookings ClassBooking[]
 
   @@index([dayOfWeek])
 }
@@ -672,17 +673,17 @@ model ClassBooking {
 }
 
 model EquipmentBooking {
-  id          String        @id @default(cuid())
-  equipment   Equipment     @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+  id          String    @id @default(cuid())
+  equipment   Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
   equipmentId String
-  member      User          @relation(fields: [memberId], references: [id])
+  member      User      @relation(fields: [memberId], references: [id])
   memberId    String
 
-  startTime   DateTime
-  endTime     DateTime
-  status      BookingStatus @default(PENDING)
+  startTime DateTime
+  endTime   DateTime
+  status    BookingStatus @default(PENDING)
 
-  createdAt   DateTime      @default(now())
+  createdAt DateTime @default(now())
 
   @@index([equipmentId])
   @@index([memberId])
@@ -693,6 +694,7 @@ model Holiday {
   date DateTime @unique @db.Date
   name String
 }
+
 
 // ============================================================================
 // ATTENDANCE, GAMIFICATION, FEEDBACK & DOCUMENTS

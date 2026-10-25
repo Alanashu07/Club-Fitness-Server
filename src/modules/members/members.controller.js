@@ -640,28 +640,6 @@ const createMember = asyncHandler(async (req, res) => {
     );
 });
 
-const getAllTrainers = asyncHandler(async (req, res) => {
-    const { title } = req.query;
-
-    const where = { role: 'STAFF', status: 'ACTIVE' };
-    if (title) {
-        where.staffTitle = { equals: title, mode: 'insensitive' };
-    }
-
-    const trainers = await prisma.user.findMany({
-        where,
-        select: {
-            id: true,
-            name: true,
-            staffTitle: true,
-            profileImageUrl: true,
-        },
-        orderBy: { name: 'asc' },
-    });
-
-    res.json({ trainers });
-});
-
 const getAllMembershipPlans = asyncHandler(async (req, res) => {
     const { includeInactive, includeOffers = 'true', context } = req.query;
 
@@ -1693,7 +1671,6 @@ export default {
     getMemberDetails,
     createMember,
     updateMember,
-    getAllTrainers,
     getAllMembershipPlans,
     createMembershipPlan,
     updateMembershipPlan,
