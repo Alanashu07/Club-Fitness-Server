@@ -695,6 +695,18 @@ model Holiday {
   name String
 }
 
+// ============================================================================
+// SITE SETTINGS — key/value config (branding, contact info, etc.)
+// ============================================================================
+
+model SiteSetting {
+  id          String   @id @default(cuid())
+  key         String   @unique // e.g. "app_name", "logo_url"
+  value       String   @db.Text
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
 
 // ============================================================================
 // ATTENDANCE, GAMIFICATION, FEEDBACK & DOCUMENTS

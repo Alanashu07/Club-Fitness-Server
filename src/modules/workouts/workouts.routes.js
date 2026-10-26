@@ -18,6 +18,8 @@ router.get('/exercises', authorize('ADMIN', 'STAFF'), workoutController.getAllEx
 router.post('/exercises', authorize('ADMIN', 'STAFF'), workoutController.createExercise);
 router.get('/exercises/:id', authorize('ADMIN', 'STAFF'), workoutController.getExerciseDetails);
 router.patch('/exercises/:id', authorize('ADMIN'), workoutController.updateExercise);
+router.patch('/exercises/:id/deactivate', authorize('ADMIN'), workoutController.deactivateExercise);
+router.delete('/exercises/:id', authorize('ADMIN'), workoutController.deleteExercise);
 router.post('/assign', authorize('ADMIN', 'STAFF'), workoutController.assignWorkout);
 
 //WORKOUT PLANS

@@ -962,6 +962,42 @@ const admin = new AdminJS({
         filterProperties: ['title', 'category', 'uploadedBy'],
       },
     },
+    // ==================
+    // SETTINGS
+    // ==================
+    {
+      resource: { model: getDMMFModelByName('SiteSetting'), client: prisma, dmmf: Prisma.dmmf },
+      options: {
+        navigation: { name: 'Settings', icon: 'Settings' },
+        properties: {
+          key: {
+            isTitle: true,
+            description: 'Unique identifier used by the app, e.g. app_name, logo_url. Changing it may break the app.',
+          },
+          value: {
+            type: 'textarea',
+            props: { rows: 6 },
+            description: 'The setting value. Use valid JSON for structured values like opening_hours.',
+          },
+          description: { type: 'textarea' },
+          createdAt: { isVisible: { list: false, filter: true, show: true, edit: false } },
+          updatedAt: { isVisible: { list: true, filter: false, show: true, edit: false } },
+        },
+        listProperties: ['key', 'value', 'description', 'updatedAt'],
+        filterProperties: ['key', 'value'],
+        showProperties: ['id', 'key', 'value', 'description', 'createdAt', 'updatedAt'],
+        editProperties: ['key', 'value', 'description'],
+        sort: { sortBy: 'key', direction: 'asc' },
+        actions: {
+          // Keys are referenced by the app code, so prevent accidental deletion.
+          delete: { isAccessible: ({ currentAdmin }) => currentAdmin?.role === 'ADMIN' },
+          bulkDelete: { isAccessible: false },
+          // Only admins can change settings; staff can view them.
+          new: { isAccessible: ({ currentAdmin }) => currentAdmin?.role === 'ADMIN' },
+          edit: { isAccessible: ({ currentAdmin }) => currentAdmin?.role === 'ADMIN' },
+        },
+      },
+    },
   ],
 
   rootPath: '/admin',
@@ -1005,6 +1041,7 @@ const admin = new AdminJS({
           DeviceCommand: { name: 'Device Command', navigation: 'Device Commands' },
           Offer: { name: 'Offer', navigation: 'Offers' },
           UserOffer: { name: 'Offer Redemption', navigation: 'Offer Redemptions' },
+          SiteSetting: { name: 'Setting', navigation: 'Site Settings' },
         },
       },
     },

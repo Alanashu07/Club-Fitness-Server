@@ -1,6 +1,7 @@
 import dateUtil from '../../utils/date.js';
 import prisma from '../../config/db.js';
 import { hashPassword } from '../../utils/password.js';
+import { fail } from '../../validators/error.handler.js';
 
 function asyncHandler(fn) {
   return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -286,6 +287,76 @@ const updateExercise = asyncHandler(async (req, res) => {
   });
 
   res.json(exercise);
+});
+
+const deactivateExercise = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const exercise = await prisma.exercise.update({
+    where: { id },
+    data: { isActive: false },
+  });
+  if(!exercise) {
+    return fail(req, res, 404, 'Exercise not found', 'EXERCISE_NOT_FOUND', 'Exercise not found', 'No exercise exists with this id.');
+  }
+  res.json(exercise);
+});
+
+const deleteExercise = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+
+  const exercise = await prisma.exercise.findUnique({
+    where: { id },
+    select: { id: true, name: true, isActive: true },
+  });
+
+  if (!exercise) {
+    const failure = {
+      title: 'Exercise not found',
+      code: 404,
+      message: 'Exercise not found with ID: ' + id,
+    };
+    return res
+      .status(404)
+      .json({ error: 'Exercise not found', code: 'EXERCISE_NOT_FOUND', failure });
+  }
+
+  // PlanExercise rows cover both templates and plans assigned to members
+  const usageCount = await prisma.planExercise.count({
+    where: { exerciseId: id },
+  });
+
+  if (usageCount > 0) {
+    const message = `"${exercise.name}" is used in ${usageCount} workout plan entr${
+      usageCount === 1 ? 'y' : 'ies'
+    } and cannot be deleted. Deactivate it instead.`;
+    const failure = { title: 'Exercise in use', code: 409, message };
+    return res.status(409).json({
+      error: 'Exercise is in use',
+      code: 'EXERCISE_IN_USE',
+      usageCount,
+      alreadyInactive: !exercise.isActive,
+      failure,
+    });
+  }
+
+  try {
+    await prisma.exercise.delete({ where: { id } });
+  } catch (err) {
+    // A plan started using it between the count and the delete (FK violation)
+    if (err.code === 'P2003') {
+      const failure = {
+        title: 'Exercise in use',
+        code: 409,
+        message: `"${exercise.name}" was just added to a plan and cannot be deleted. Deactivate it instead.`,
+      };
+      return res
+        .status(409)
+        .json({ error: 'Exercise is in use', code: 'EXERCISE_IN_USE', failure });
+    }
+    throw err;
+  }
+
+  return res.status(204).json({ message: `Exercise "${exercise.name}" deleted` });
 });
 
 // =============================================================================
@@ -971,6 +1042,8 @@ export default {
   getExerciseDetails,
   createExercise,
   updateExercise,
+  deactivateExercise,
+  deleteExercise,
   assignWorkout,
   getAllPlans,
   getPlanDetails,
