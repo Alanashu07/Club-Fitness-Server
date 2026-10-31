@@ -1,7 +1,9 @@
 import prisma from '../../config/db.js';
 import checkinService from '../device/checkin.service.js';
+import commandQueue from '../device/device-command-queue.service.js';
 import { fail } from '../../validators/error.handler.js';
-import { deleteProfileImage } from '../../config/multer.js';
+import { deleteProfileImage, getFileUrl } from '../../config/multer.js';
+import env from '../../config/env.js';
 
 function asyncHandler(fn) {
     return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -45,6 +47,32 @@ const toTrainerDto = (t) => ({
     status: t.status,
     blocked: t.blocked,
     traineeCount: t._count?.trainees ?? 0,
+});
+
+const toTraineeDto = (m) => ({
+    id: m.id,
+    name: m.name,
+    profileImageUrl: m.profileImageUrl,
+    blocked: m.blocked,
+    membershipEnd: m.membershipEnd,
+    status: m.status,
+    membershipPlanId: m.membershipPlan ? m.membershipPlan.id : null,
+    membershipPlanName: m.membershipPlan ? m.membershipPlan.name : null,
+});
+
+const toWorkoutPlanDto = (p) => ({
+    id: p.id,
+    name: p.name,
+    createdAt: p.createdAt,
+    assignedCount: p._count?.assignments ?? 0,
+});
+
+const toTrainerDetailDto = (t) => ({
+    ...toTrainerDto(t),
+    devicePin: t.devicePin,
+    createdAt: t.createdAt,
+    trainees: (t.trainees ?? []).map(toTraineeDto),
+    workoutPlansCreated: (t.workoutPlansCreated ?? []).map(toWorkoutPlanDto),
 });
 
 const parseDate = (value) => {
@@ -100,14 +128,44 @@ const getAllTrainers = asyncHandler(async (req, res) => {
     res.json({ trainers: trainers.map(toTrainerDto) });
 });
 
-// ── GET /api/admin/trainers/:id ──────────────────────────────────────────────
+// ── GET /api/v1/trainers/:id ──────────────────────────────────────────────
+// Returns the flat shape TrainerDetailEntity.fromJson expects:
+// trainer fields at the top level + `trainees` + `workoutPlansCreated`.
 const getTrainer = asyncHandler(async (req, res) => {
     const trainer = await prisma.user.findUnique({
-        where: { id: req.params.id },
-        select: { ...TRAINER_SELECT, role: true },
+        where: { id: req.params.id, role: 'STAFF' },
+        select: {
+            ...TRAINER_SELECT,
+            role: true,
+            createdAt: true,
+            trainees: {
+                select: {
+                    id: true,
+                    name: true,
+                    profileImageUrl: true,
+                    blocked: true,
+                    membershipEnd: true,
+                    membershipPlan: { select: { id: true, name: true } },
+                    status: true,
+                },
+                orderBy: { name: 'asc' },
+            },
+            workoutPlansCreated: {
+                select: {
+                    id: true,
+                    name: true,
+                    createdAt: true,
+                    _count: { select: { assignments: true } },
+                },
+                orderBy: { createdAt: 'desc' },
+                take: 5,
+            },
+        },
     });
-    if (!trainer || trainer.role !== 'STAFF') return notFound(req, res);
-    res.json({ trainer: toTrainerDto(trainer) });
+
+    if (!trainer) return notFound(req, res);
+
+    res.json(toTrainerDetailDto(trainer));
 });
 
 // ── POST /api/admin/trainers ─────────────────────────────────────────────────
@@ -180,7 +238,7 @@ const createTrainer = asyncHandler(async (req, res) => {
 // Body (all optional): name, phone, email, staffTitle, emergencyContact, hireDate
 const updateTrainer = asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const current = await prisma.user.findUnique({ where: { id }, select: { id: true, role: true, phone: true, email: true } });
+    const current = await prisma.user.findUnique({ where: { id }, select: { id: true, role: true, phone: true, email: true, profileImageUrl: true, deviceSN: true, devicePin: true, name: true } });
     if (!current || current.role !== 'STAFF') return notFound(req, res);
 
     const name = req.body.name === undefined ? undefined : clean(req.body.name);
@@ -222,8 +280,8 @@ const updateTrainer = asyncHandler(async (req, res) => {
         select: TRAINER_SELECT,
     });
 
-    if (profileImageUrl !== undefined && trainer.profileImageUrl && trainer.profileImageUrl !== profileImageUrl) {
-        deleteProfileImage(member.profileImageUrl); // best effort, errors are logged inside
+    if (profileImageUrl !== undefined && current.profileImageUrl) {
+        deleteProfileImage(current.profileImageUrl);
     }
 
     res.json({ trainer: toTrainerDto(trainer) });
