@@ -102,7 +102,7 @@ const sendTrainerWelcomeEmail = async function (toEmail, { name, staffTitle, hir
     const template = await loadTemplate(WELCOME_TRAINER_TEMPLATE_PATH, __dirname);
     const html = Mustache.render(template, {
         logo_url: env.LOGO_URL,
-        name: trainer.name,
+        name: name,
         staff_title: staffTitle || 'Trainer',
         hire_date: formatDate(hireDate),
         phone: phone,
