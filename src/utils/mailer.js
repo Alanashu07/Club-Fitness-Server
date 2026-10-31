@@ -8,6 +8,7 @@ import prisma from '../config/db.js';
 
 const OTP_TEMPLATE_PATH = '../components/otp-template.html';
 const WELCOME_TEMPLATE_PATH = '../components/welcome-template.html';
+const WELCOME_TRAINER_TEMPLATE_PATH = '../components/welcome-trainer-template.html';
 const RENEW_TEMPLATE_PATH = '../components/renew-membership-template.html';
 const FEE_OVERDUE_TEMPLATE_PATH = '../components/fee-overdue-template.html';
 const FEE_REMINDER_TEMPLATE_PATH = '../components/fee-reminder-template.html';
@@ -81,6 +82,46 @@ const sendWelcomeEmail = async function (
         text: `Welcome to ClubFitness, ${name || 'there'}!\n\nYour ${planName || 'membership'} is now active (Member ID: ${memberId || 'N/A'}).\n\nGet started: ${ctaUrl || env.APP_URL}\n\nQuestions? Contact us at ${supportEmail} or ${supportPhone}.`,
     });
 
+    if (!sent) {
+        throw new Error('Failed to send welcome email');
+    }
+};
+
+const formatDate = (d) =>
+    d
+        ? new Date(d).toLocaleDateString('en-IN', {
+            day: '2-digit',
+            month: 'short',
+            year: 'numeric',
+        })
+        : '';
+
+const sendTrainerWelcomeEmail = async function (toEmail, { name, staffTitle, hireDate, phone, devicePin }) {
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = path.dirname(__filename);
+    const template = await loadTemplate(WELCOME_TRAINER_TEMPLATE_PATH, __dirname);
+    const html = Mustache.render(template, {
+        logo_url: env.LOGO_URL,
+        name: trainer.name,
+        staff_title: staffTitle || 'Trainer',
+        hire_date: formatDate(hireDate),
+        phone: phone,
+        device_pin: devicePin, // row is hidden when null
+        cta_url: env.APP_URL,
+        cta_label: 'Open App',
+        support_email: env.SUPPORT_EMAIL,
+        support_phone: env.SUPPORT_PHONE,
+        instagram_url: env.INSTAGRAM_URL,
+        facebook_url: env.FACEBOOK_URL,
+        year: new Date().getFullYear(),
+        gym_address: env.GYM_ADDRESS,
+    });
+    const sent = await sendEmail({
+        to: toEmail,
+        subject: `Welcome to Club Fitness, ${name}!`,
+        html,
+        text: `Welcome to Club Fitness, ${name}!\n\nWe are happy to have you here as a ${staffTitle || 'trainer'}!.\n\nGet started: ${env.APP_URL}\n\nQuestions? Contact us at ${env.SUPPORT_EMAIL} or ${env.SUPPORT_PHONE}.`,
+    });
     if (!sent) {
         throw new Error('Failed to send welcome email');
     }
@@ -218,7 +259,7 @@ async function loadFee(feeRecordId) {
     return fee;
 }
 
-async function deliverMembershipMail(member, { subject, html, text, sentField, automatic = true}) {
+async function deliverMembershipMail(member, { subject, html, text, sentField, automatic = true }) {
     const sent = await sendEmail({ to: member.email, subject, html, text });
     if (!sent) throw new Error(`Failed to send "${subject}" to ${member.email}`);
 
@@ -324,13 +365,13 @@ async function sendFeeOverdueEmail(feeRecordId, { automatic = true } = {}) {
 }
 
 function formatHour(hoursLeft) {
-    if(hoursLeft <= 1) return 'an hour';
-    if(hoursLeft <= 24) return `${hoursLeft} hours`;
+    if (hoursLeft <= 1) return 'an hour';
+    if (hoursLeft <= 24) return `${hoursLeft} hours`;
     const days = Math.floor(hoursLeft / 24);
-    if(days === 1) return 'a day';
-    if(days <= 30) return `${days} days`;
+    if (days === 1) return 'a day';
+    if (days <= 30) return `${days} days`;
     const months = Math.floor(days / 30);
-    if(months === 1) return 'a month';
+    if (months === 1) return 'a month';
     return `${months} months`;
 }
 
@@ -380,5 +421,5 @@ async function sendExpiredNoticeEmail(member, now = new Date(), { automatic = tr
 export {
     sendOtpEmail, sendWelcomeEmail, sendRenewalEmail,
     sendFeeReminderEmail, sendFeeOverdueEmail,
-    sendExpiryReminderEmail, sendExpiredNoticeEmail,
+    sendExpiryReminderEmail, sendExpiredNoticeEmail, sendTrainerWelcomeEmail,
 };

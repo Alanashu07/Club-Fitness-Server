@@ -4,6 +4,7 @@ import commandQueue from '../device/device-command-queue.service.js';
 import { fail } from '../../validators/error.handler.js';
 import { deleteProfileImage, getFileUrl } from '../../config/multer.js';
 import env from '../../config/env.js';
+import { sendTrainerWelcomeEmail } from '../../utils/mailer.js';
 
 function asyncHandler(fn) {
     return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -231,6 +232,10 @@ const createTrainer = asyncHandler(async (req, res) => {
         `DATA UPDATE USERINFO PIN=${devicePin}\tName=${deviceSafeName(name)}\tPri=0\tCard=0\tGrp=${env.DEFAULT_DEVICE_GROUP_ID}`
     ).catch((err) =>
         console.error('queueCommand failed', { trainerId: trainer.id, deviceSN, err })
+    );
+
+    sendTrainerWelcomeEmail(email, { name, staffTitle, hireDate: hire.value, phone, devicePin }).catch((err) =>
+        console.error('sendTrainerWelcomeEmail failed', { trainerId: trainer.id, email, err })
     );
 });
 
